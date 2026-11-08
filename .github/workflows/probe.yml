@@ -1,0 +1,21 @@
+# 一次性探測：確認 GitHub Actions 的機器抓得到各銀行匯率 API。
+# 到 GitHub 的 Actions 分頁手動按 "Run workflow" 執行。
+name: probe-banks
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python scripts/probe_banks.py

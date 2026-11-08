@@ -1,3 +1,5 @@
+import json
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -5,129 +7,152 @@ import pytest
 
 from fx_alert.parser import ParseError, get_cash_sell, parse_rates
 
-FIXTURE = Path(__file__).parent / "fixtures" / "bot_rates_sample.csv"
-
-HEADER = (
-    "幣別,匯率,現金,即期,遠期10天,遠期30天,遠期60天,遠期90天,遠期120天,遠期150天,遠期180天,"
-    "匯率,現金,即期,遠期10天,遠期30天,遠期60天,遠期90天,遠期120天,遠期150天,遠期180天"
-)
+FIXTURE = Path(__file__).parent / "fixtures" / "mega_rates_sample.json"
 
 
-def row(code: str, cash_buy: str, spot_buy: str, cash_sell: str, spot_sell: str) -> str:
-    """組一列仿台銀格式的資料（遠期欄位填固定值）。"""
-    fwd = ",".join(["0.00000"] * 7)
-    return f"{code},本行買入,{cash_buy},{spot_buy},{fwd},本行賣出,{cash_sell},{spot_sell},{fwd}"
+def item(code, cash_bid, cash_ask, spot_bid="", spot_ask="", num="00"):
+    """組一筆仿兆豐格式的幣別資料。"""
+    return {
+        "currKey": f"{code}|{num}",
+        "spot": {"bid": spot_bid, "ask": spot_ask, "bidOld": "", "askOld": ""},
+        "cash": {"bid": cash_bid, "ask": cash_ask, "bidOld": "", "askOld": ""},
+        "update": "20261109022607",
+    }
 
 
-def make_csv(*rows: str, bom: bool = False) -> str:
-    text = "\n".join([HEADER, *rows]) + "\n"
+def make_json(*items, update_time="2026/11/09 02:26:07", bom=False) -> str:
+    text = json.dumps({"updateTime": update_time, "rates": list(items)}, ensure_ascii=False)
     return ("﻿" + text) if bom else text
 
 
-# ---------- 合成資料：基本解析 ----------
+JPY = item("JPY", "0.1978", "0.2105", "0.2050", "0.2091", "08")
+
+
+# ---------- 基本解析 ----------
 
 
 def test_parses_jpy_cash_sell_as_exact_decimal():
-    quotes = parse_rates(make_csv(row("JPY", "0.1958", "0.2035", "0.2086", "0.2085")))
-    jpy = quotes["JPY"]
+    jpy = parse_rates(make_json(JPY)).quotes["JPY"]
     assert isinstance(jpy.cash_sell, Decimal)
-    assert jpy.cash_sell == Decimal("0.2086")
-    assert jpy.cash_buy == Decimal("0.1958")
-    assert jpy.spot_buy == Decimal("0.2035")
-    assert jpy.spot_sell == Decimal("0.2085")
+    assert jpy.cash_sell == Decimal("0.2105")
+    assert jpy.cash_buy == Decimal("0.1978")
+    assert jpy.spot_buy == Decimal("0.2050")
+    assert jpy.spot_sell == Decimal("0.2091")
 
 
 def test_get_cash_sell_returns_value():
-    quotes = parse_rates(make_csv(row("JPY", "0.1958", "0.2035", "0.2086", "0.2085")))
-    assert get_cash_sell(quotes, "JPY") == Decimal("0.2086")
+    assert get_cash_sell(parse_rates(make_json(JPY)), "JPY") == Decimal("0.2105")
 
 
-def test_handles_bom_and_padded_cells():
-    text = make_csv(row("JPY", "0.1958 ", " 0.2035", "  0.2086", "0.2085  "), bom=True)
-    assert parse_rates(text)["JPY"].cash_sell == Decimal("0.2086")
+def test_parses_update_time():
+    assert parse_rates(make_json(JPY)).quoted_at == datetime(2026, 11, 9, 2, 26, 7)
 
 
-def test_handles_crlf_line_endings():
-    text = make_csv(row("JPY", "0.1958", "0.2035", "0.2086", "0.2085")).replace("\n", "\r\n")
-    assert parse_rates(text)["JPY"].cash_sell == Decimal("0.2086")
+@pytest.mark.parametrize("bad", [None, "", "昨天", 12345])
+def test_bad_update_time_becomes_none_but_rates_still_parse(bad):
+    board = parse_rates(make_json(JPY, update_time=bad))
+    assert board.quoted_at is None
+    assert board.quotes["JPY"].cash_sell == Decimal("0.2105")
+
+
+def test_handles_bom_and_padded_numbers():
+    text = make_json(item("JPY", " 0.1978", "0.2105  "), bom=True)
+    assert parse_rates(text).quotes["JPY"].cash_sell == Decimal("0.2105")
+
+
+def test_numeric_json_values_are_accepted():
+    data = {"rates": [{"currKey": "JPY|08", "cash": {"bid": 0.1978, "ask": "0.2105"}}]}
+    assert parse_rates(json.dumps(data)).quotes["JPY"].cash_buy == Decimal("0.1978")
+
+
+def test_lowercase_currency_key_is_normalised():
+    assert "JPY" in parse_rates(make_json(item("jpy", "0.1978", "0.2105"))).quotes
 
 
 # ---------- 韓元沒有即期匯率 ----------
 
 
-@pytest.mark.parametrize("missing", ["", "-", "0", "0.00000", " - "])
+@pytest.mark.parametrize("missing", ["", "-", "0", "0.0000", " - ", None])
 def test_krw_without_spot_rate_does_not_break(missing):
-    text = make_csv(
-        row("JPY", "0.1958", "0.2035", "0.2086", "0.2085"),
-        row("KRW", "0.02183", missing, "0.02573", missing),
-    )
-    quotes = parse_rates(text)
-    krw = quotes["KRW"]
-    assert krw.cash_sell == Decimal("0.02573")
-    assert krw.cash_buy == Decimal("0.02183")
-    assert krw.spot_buy is None
-    assert krw.spot_sell is None
-    # 其他幣別不受影響
-    assert quotes["JPY"].cash_sell == Decimal("0.2086")
+    krw = item("KRW", "0.0224", "0.0260", missing, missing, "13")
+    board = parse_rates(make_json(JPY, krw))
+    q = board.quotes["KRW"]
+    assert q.cash_sell == Decimal("0.0260")
+    assert q.cash_buy == Decimal("0.0224")
+    assert q.spot_buy is None
+    assert q.spot_sell is None
+    assert board.quotes["JPY"].cash_sell == Decimal("0.2105")  # 其他幣別不受影響
 
 
-def test_krw_row_truncated_after_cash_still_parses():
-    text = make_csv("KRW,本行買入,0.02183,本行賣出,0.02573")
-    krw = parse_rates(text)["KRW"]
-    assert krw.cash_sell == Decimal("0.02573")
-    assert krw.spot_sell is None
+def test_krw_with_spot_object_missing_entirely():
+    data = {"rates": [{"currKey": "KRW|13", "cash": {"bid": "0.0224", "ask": "0.0260"}}]}
+    q = parse_rates(json.dumps(data)).quotes["KRW"]
+    assert q.cash_sell == Decimal("0.0260")
+    assert q.spot_sell is None
 
 
-# ---------- 錯誤情況：應該明確拋錯，而不是悄悄回傳錯的數字 ----------
+# ---------- 錯誤情況：明確拋錯，不悄悄回傳錯的數字 ----------
 
 
-def test_empty_text_raises():
-    with pytest.raises(ParseError):
-        parse_rates("")
+@pytest.mark.parametrize("text", ["", "not json", "<!DOCTYPE html><html></html>"])
+def test_invalid_json_raises(text):
+    with pytest.raises(ParseError, match="JSON"):
+        parse_rates(text)
 
 
-def test_header_only_raises():
-    with pytest.raises(ParseError):
-        parse_rates(make_csv())
+@pytest.mark.parametrize("payload", [[], {"foo": 1}, {"rates": "x"}])
+def test_wrong_structure_raises(payload):
+    with pytest.raises(ParseError, match="rates"):
+        parse_rates(json.dumps(payload))
 
 
-def test_row_without_markers_raises():
-    with pytest.raises(ParseError, match="標記"):
-        parse_rates(make_csv("JPY,0.1958,0.2035,0.2086,0.2085"))
+def test_empty_rates_raises():
+    with pytest.raises(ParseError, match="空"):
+        parse_rates(make_json())
 
 
-def test_non_numeric_value_raises():
+def test_item_without_currkey_raises():
+    with pytest.raises(ParseError, match="currKey"):
+        parse_rates(json.dumps({"rates": [{"cash": {"ask": "1"}}]}))
+
+
+def test_cash_not_an_object_raises():
+    with pytest.raises(ParseError, match="cash"):
+        parse_rates(json.dumps({"rates": [{"currKey": "JPY|08", "cash": "0.2105"}]}))
+
+
+@pytest.mark.parametrize("bad", ["abc", True])
+def test_non_numeric_value_raises(bad):
     with pytest.raises(ParseError, match="不是數字"):
-        parse_rates(make_csv(row("JPY", "0.1958", "0.2035", "abc", "0.2085")))
+        parse_rates(make_json(item("JPY", "0.1978", bad)))
 
 
 def test_get_cash_sell_missing_currency_raises():
-    quotes = parse_rates(make_csv(row("JPY", "0.1958", "0.2035", "0.2086", "0.2085")))
     with pytest.raises(ParseError, match="KRW"):
-        get_cash_sell(quotes, "KRW")
+        get_cash_sell(parse_rates(make_json(JPY)), "KRW")
 
 
 def test_get_cash_sell_missing_cash_quote_raises():
-    quotes = parse_rates(make_csv(row("KRW", "-", "-", "-", "-")))
+    board = parse_rates(make_json(item("KRW", "", "")))
     with pytest.raises(ParseError, match="現金賣出"):
-        get_cash_sell(quotes, "KRW")
+        get_cash_sell(board, "KRW")
 
 
-# ---------- 真實台銀檔案（你下載的 fixture） ----------
+# ---------- 真實兆豐回應（fixture） ----------
 
 
-@pytest.mark.skipif(not FIXTURE.exists(), reason="尚未放入 tests/fixtures/bot_rates_sample.csv")
+@pytest.mark.skipif(not FIXTURE.exists(), reason="尚未放入 tests/fixtures/mega_rates_sample.json")
 def test_real_fixture_has_sane_jpy_and_krw():
-    text = FIXTURE.read_bytes().decode("utf-8-sig")
-    quotes = parse_rates(text)
+    board = parse_rates(FIXTURE.read_bytes().decode("utf-8-sig"))
 
-    jpy = get_cash_sell(quotes, "JPY")
-    krw = get_cash_sell(quotes, "KRW")
+    jpy = get_cash_sell(board, "JPY")
+    krw = get_cash_sell(board, "KRW")
     # 合理範圍檢查：抓到的是「現金賣出」而不是別的欄位
     assert Decimal("0.1") < jpy < Decimal("0.4")
     assert Decimal("0.01") < krw < Decimal("0.05")
     # 現金賣出一定比現金買入貴
-    assert quotes["JPY"].cash_buy < jpy
-    assert quotes["KRW"].cash_buy < krw
-    # 台銀韓元沒有即期報價
-    assert quotes["KRW"].spot_sell is None
+    assert board.quotes["JPY"].cash_buy < jpy
+    assert board.quotes["KRW"].cash_buy < krw
+    # 兆豐韓元沒有即期報價
+    assert board.quotes["KRW"].spot_sell is None
+    assert board.quoted_at is not None

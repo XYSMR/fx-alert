@@ -141,3 +141,29 @@ def test_weekends_allowed_when_configured():
 
 def test_taipei_is_utc_plus_8():
     assert TAIPEI.utcoffset(None) == timedelta(hours=8)
+
+
+# ---------- 每日寄信上限 ----------
+
+
+def test_daily_limit_default_and_repo_value():
+    assert parse_config(base()).daily_limit == 400
+    assert load_config(ROOT / "config.yaml").daily_limit == 400
+    assert parse_config(base(email={"daily_limit": 50})).daily_limit == 50
+
+
+@pytest.mark.parametrize(
+    "email",
+    [
+        {"daily_limit": 0},
+        {"daily_limit": 2001},
+        {"daily_limit": "400"},
+        {"daily_limit": True},
+        {"daily_limit": 1.5},
+        {"limit": 400},
+        "400",
+    ],
+)
+def test_invalid_daily_limit(email):
+    with pytest.raises(ConfigFileError):
+        parse_config(base(email=email))

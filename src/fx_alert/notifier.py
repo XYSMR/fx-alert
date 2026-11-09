@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import os
+import re
 import smtplib
 import ssl
 import sys
@@ -33,6 +34,14 @@ RATE_PAGE = (
 TIMEOUT_SECONDS = 20
 
 
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def redact_emails(text: str) -> str:
+    """把文字裡的 email 換成 ***。錯誤訊息會進公開的 GitHub Actions log。"""
+    return _EMAIL_RE.sub("***", text)
+
+
 class ConfigError(RuntimeError):
     """必要的環境變數沒設定。"""
 
@@ -50,14 +59,20 @@ class EmailConfig:
     port: int = 465
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> EmailConfig:
+    def from_env(
+        cls, env: Mapping[str, str] | None = None, *, require_to: bool = True
+    ) -> EmailConfig:
+        """require_to=False：多人版，收件人來自資料庫，不需要 MAIL_TO。"""
         env = os.environ if env is None else env
-        missing = [
-            k for k in ("SMTP_USER", "SMTP_PASSWORD", "MAIL_TO") if not env.get(k, "").strip()
-        ]
+        required = (
+            ("SMTP_USER", "SMTP_PASSWORD", "MAIL_TO")
+            if require_to
+            else ("SMTP_USER", "SMTP_PASSWORD")
+        )
+        missing = [k for k in required if not env.get(k, "").strip()]
         if missing:
             raise ConfigError(f"缺少環境變數：{', '.join(missing)}")
-        to = tuple(a.strip() for a in env["MAIL_TO"].split(",") if a.strip())
+        to = tuple(a.strip() for a in env.get("MAIL_TO", "").split(",") if a.strip())
         try:
             port = int(env.get("SMTP_PORT", "465"))
         except ValueError as exc:
@@ -147,7 +162,8 @@ class SmtpNotifier:
                 "（帳號需開啟兩步驟驗證）"
             ) from exc
         except (smtplib.SMTPException, OSError) as exc:
-            raise NotifyError(f"寄信失敗：{type(exc).__name__}: {exc}") from exc
+            # 例如 SMTPRecipientsRefused 的訊息會包含收件人地址
+            raise NotifyError(redact_emails(f"寄信失敗：{type(exc).__name__}: {exc}")) from exc
 
 
 class DryRunNotifier:
@@ -160,7 +176,9 @@ class DryRunNotifier:
     def send(self, msg: EmailMessage) -> None:
         self.sent.append(msg)
         out = self._out or sys.stdout
-        print(f"[dry-run] 不寄出：To={msg['To']} Subject={msg['Subject']}", file=out)
+        # 不印出收件人地址：多人版的 dry-run 也可能在公開的 Actions log 裡執行
+        count = len([a for a in str(msg["To"] or "").split(",") if a.strip()])
+        print(f"[dry-run] 不寄出：收件人 {count} 位，Subject={msg['Subject']}", file=out)
 
 
 def _main(argv: list[str]) -> int:

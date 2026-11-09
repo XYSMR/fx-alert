@@ -10,11 +10,18 @@ import requests
 
 from fx_alert import main as main_mod
 from fx_alert.config import TAIPEI, AppConfig, BusinessHours
-from fx_alert.history import read_alerts
-from fx_alert.notifier import DryRunNotifier, EmailConfig
+from fx_alert.history import append_alert, read_alerts
+from fx_alert.notifier import DryRunNotifier, EmailConfig, NotifyError
 from fx_alert.rules import AlertState, Rule
 from fx_alert.state_store import load_states
-from fx_alert.store import FileStore, StoreError, SupabaseConfig, SupabaseStore, Watch
+from fx_alert.store import (
+    FileStore,
+    ReadOnlyStore,
+    StoreError,
+    SupabaseConfig,
+    SupabaseStore,
+    Watch,
+)
 
 NOW = datetime(2026, 11, 9, 10, 7, tzinfo=TAIPEI)
 ARMED, TRIG = AlertState.ARMED, AlertState.TRIGGERED
@@ -84,6 +91,20 @@ def test_filestore_unchanged_state_is_not_rewritten(tmp_path):
     assert store.flush() is False
 
 
+def test_filestore_counts_alerts_since(tmp_path):
+    cfg = make_cfg(tmp_path)
+    store = FileStore(cfg, recipients=[])
+    assert store.count_sent_since(NOW) == 0  # 還沒有 alerts.csv
+    for at in [
+        "2026-11-08T16:00:00+08:00",
+        "2026-11-09T00:00:00+08:00",
+        "2026-11-09T09:30:00+08:00",
+    ]:
+        append_alert(cfg.data_dir, datetime.fromisoformat(at), "JPY", D("0.2"), D("0.205"))
+    day_start = NOW.replace(hour=0, minute=0)
+    assert store.count_sent_since(day_start) == 2
+
+
 def test_filestore_requires_load_first(tmp_path):
     store = FileStore(make_cfg(tmp_path), recipients=[])
     w = Watch("JPY", "JPY", Rule("JPY", D("0.2"), D("0")), None, None, ())
@@ -98,11 +119,12 @@ def test_filestore_requires_load_first(tmp_path):
 
 
 class FakeResponse:
-    def __init__(self, status=200, body=None, reason="OK"):
+    def __init__(self, status=200, body=None, reason="OK", headers=None):
         self.status_code = status
         self.ok = 200 <= status < 300
         self.reason = reason
         self._body = body
+        self.headers = headers or {}
 
     def json(self):
         if isinstance(self._body, Exception):
@@ -136,7 +158,7 @@ ROWS = [
         "effective_buffer": "0.001025",
         "state": "triggered",
         "state_target": "0.210000",
-        "profiles": {"email": "alice@example.com", "email_enabled": True},
+        "email": "alice@example.com",
     },
     {
         "id": 9,
@@ -145,7 +167,7 @@ ROWS = [
         "effective_buffer": "0.000200",
         "state": "armed",
         "state_target": None,
-        "profiles": {"email": "bob@example.com", "email_enabled": True},
+        "email": "bob@example.com",
     },
 ]
 
@@ -181,13 +203,11 @@ def test_load_watches_request():
     store.load_watches()
     (call,) = session.calls
     assert call["method"] == "GET"
-    assert call["url"] == f"{URL}/rest/v1/alert_rules"
+    # active_rules 已經排除停用的規則和 Email 關閉的人（tests/db 有測）
+    assert call["url"] == f"{URL}/rest/v1/active_rules"
     assert call["headers"]["apikey"] == KEY
     assert "Authorization" not in call["headers"]  # secret key 不能當 JWT 用
-    params = call["params"]
-    assert params["enabled"] == "is.true"
-    assert params["profiles.email_enabled"] == "is.true"  # Email 關閉的人不檢查
-    assert "target::text" in params["select"]  # 數字用文字取回，避免浮點誤差
+    assert "target::text" in call["params"]["select"]  # 數字用文字取回，避免浮點誤差
     assert call["timeout"] > 0
 
 
@@ -286,6 +306,39 @@ def test_record_transition_skipped_when_changed_meanwhile():
     assert store.flush() is False
 
 
+def test_count_sent_since():
+    store, session = sb(FakeResponse(206, [{"id": 1}], headers={"Content-Range": "0-0/12"}))
+    assert store.count_sent_since(NOW) == 12
+    (call,) = session.calls
+    assert call["url"] == f"{URL}/rest/v1/notifications"
+    assert call["params"]["sent_at"] == "gte.2026-11-09T10:07:00+08:00"
+    assert call["headers"]["Prefer"] == "count=exact"
+
+
+def test_count_sent_since_zero_and_missing_header():
+    store, _ = sb(FakeResponse(200, [], headers={"Content-Range": "*/0"}))
+    assert store.count_sent_since(NOW) == 0
+    store, _ = sb(FakeResponse(200, []))
+    with pytest.raises(StoreError):
+        store.count_sent_since(NOW)
+
+
+# ---- ReadOnlyStore（多人版 --dry-run）----
+
+
+def test_read_only_store_reads_but_never_writes():
+    inner, session = sb(FakeResponse(body=ROWS), FakeResponse(headers={"Content-Range": "*/3"}))
+    logs = []
+    store = ReadOnlyStore(inner, log=logs.append)
+    jpy, krw = store.load_watches()
+    assert store.count_sent_since(NOW) == 3
+    store.record_alert(krw, D("0.0240"), NOW)
+    assert store.record_transition(jpy, ARMED, D("0.2200"), NOW) is True
+    assert store.flush() is False
+    assert [c["method"] for c in session.calls] == ["GET", "GET"]  # 沒有任何寫入
+    assert len(logs) == 2 and all("@" not in line for line in logs)
+
+
 # ===========================================================================
 # run_check + 自訂 store（多人）
 # ===========================================================================
@@ -305,8 +358,10 @@ def mega_json(jpy="0.2040", krw="0.0260"):
 class MemoryStore:
     """記錄呼叫的假 store。"""
 
-    def __init__(self, watches, fail_alert_for=(), fail_load=False):
+    def __init__(self, watches, fail_alert_for=(), fail_load=False, sent_today=0):
         self.watches = watches
+        self.sent_today = sent_today
+        self.count_since = None
         self.fail_alert_for = fail_alert_for
         self.fail_load = fail_load
         self.alerts, self.transitions = [], []
@@ -327,6 +382,10 @@ class MemoryStore:
 
     def flush(self):
         return bool(self.alerts or self.transitions)
+
+    def count_sent_since(self, since):
+        self.count_since = since
+        return self.sent_today
 
 
 def user_watch(key, email, target="0.205", state=None):
@@ -398,3 +457,71 @@ def test_logs_and_errors_never_contain_email(tmp_path):
     assert logs and r.errors
     for line in logs + r.errors:
         assert "@" not in line, line
+
+
+# ---- 每日寄信上限 ----
+
+
+def test_daily_limit_defers_extra_notifications(tmp_path):
+    store = MemoryStore(
+        [user_watch(str(i), f"u{i}@example.com") for i in (1, 2, 3)], sent_today=398
+    )
+    n = DryRunNotifier(out=io.StringIO())
+    r = run(tmp_path, store, n)  # 上限 400，今天已寄 398 → 只能再寄 2 封
+    assert r.notified == ["JPY 規則#1", "JPY 規則#2"]
+    assert r.deferred == ["JPY 規則#3"]
+    assert [k for k, _ in store.alerts] == ["1", "2"]  # 規則#3 的狀態不更新，下次再試
+    assert len(n.sent) == 2
+    assert r.exit_code == 0  # 延後不算錯誤
+    assert store.count_since == NOW.replace(hour=0, minute=0)  # 從台灣時間今天 00:00 算
+
+
+def test_daily_limit_reached_sends_nothing(tmp_path):
+    store = MemoryStore([user_watch("1", "a@example.com")], sent_today=400)
+    logs = []
+    r = run(tmp_path, store, logs=logs)
+    assert r.notified == [] and r.deferred == ["JPY 規則#1"] and store.alerts == []
+    assert any("延後 1 封" in line for line in logs)
+
+
+def test_failed_send_does_not_use_up_daily_quota(tmp_path):
+    class FailFirst:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, msg):
+            if not self.sent and msg["To"] == "a@example.com":
+                self.sent.append(None)
+                raise NotifyError("boom")
+            self.sent.append(msg)
+
+    store = MemoryStore(
+        [user_watch("1", "a@example.com"), user_watch("2", "b@example.com")], sent_today=399
+    )
+    r = run(tmp_path, store, FailFirst())
+    assert r.notified == ["JPY 規則#2"] and r.deferred == []
+
+
+def test_count_failure_stops_sending(tmp_path):
+    class NoCount(MemoryStore):
+        def count_sent_since(self, since):
+            raise StoreError("Supabase 回應 503：down")
+
+    n = DryRunNotifier(out=io.StringIO())
+    r = run(tmp_path, NoCount([user_watch("1", "a@example.com")]), n)
+    assert r.exit_code == 1 and n.sent == []
+
+
+# ---- 錯誤訊息遮蔽 email ----
+
+
+def test_send_error_with_address_is_redacted(tmp_path):
+    class Refused:
+        def send(self, msg):
+            raise NotifyError(f"寄信失敗：SMTPRecipientsRefused: {{'{msg['To']}': (550, b'no')}}")
+
+    store = MemoryStore([user_watch("1", "alice@example.com")])
+    r = run(tmp_path, store, Refused())
+    assert r.errors == [
+        "JPY 規則#1 通知失敗，狀態不更新：寄信失敗：SMTPRecipientsRefused: {'***': (550, b'no')}"
+    ]

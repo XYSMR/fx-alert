@@ -87,6 +87,8 @@ node --test site/tests/app.test.js         # 前端測試（選用，需要 Node
 
 python -m fx_alert validate-config         # 驗證 config.yaml
 python -m fx_alert check --dry-run --force # 實際抓匯率，但不寄信；資料寫到 data/
+# 多人版（Supabase）：只讀不寫，需要 SUPABASE_URL、SUPABASE_SECRET_KEY 環境變數
+# python -m fx_alert check --mode multi --dry-run --force
 python -m fx_alert build-site              # 產生 site/data.json
 python -m http.server 8000 -d site         # 開 http://localhost:8000/
 ```
@@ -125,6 +127,7 @@ site/
   tests/app.test.js                 前端單元測試（不部署）
 .github/workflows/
   ci.yml  check-rates.yml  deploy-pages.yml
+  staging-check.yml                 手動：用 staging Supabase 跑多人版 dry-run（只讀）
 supabase/
   config.toml                       本機 Supabase 設定（CI 用）
   migrations/                       多人版資料表、權限、RLS

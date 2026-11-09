@@ -25,7 +25,10 @@ SUPPORTED_CURRENCIES = frozenset(
 CURRENCY_NAMES = {"JPY": "日圓", "KRW": "韓元", "USD": "美元", "EUR": "歐元", "CNY": "人民幣"}
 MAX_BUFFER_RATIO = Decimal("0.1")  # buffer 不應超過目標價的 10%
 
-TOP_LEVEL_KEYS = {"data_dir", "business_hours", "currencies"}
+TOP_LEVEL_KEYS = {"data_dir", "business_hours", "currencies", "email"}
+EMAIL_KEYS = {"daily_limit"}
+DEFAULT_DAILY_LIMIT = 400  # Gmail 個人帳號每天約 500 位收件人，留一點餘裕
+MAX_DAILY_LIMIT = 2000
 HOURS_KEYS = {"weekdays_only", "start", "end"}
 CURRENCY_KEYS = {"target", "buffer"}
 
@@ -54,6 +57,7 @@ class AppConfig:
     data_dir: Path  # state.json、history/、alerts.csv、last_check.json 都放這裡
     hours: BusinessHours
     rules: tuple[Rule, ...]
+    daily_limit: int = DEFAULT_DAILY_LIMIT  # 每天（台灣時間）最多寄幾封到價通知
 
     @property
     def state_file(self) -> Path:
@@ -129,10 +133,20 @@ def parse_config(data: Any, base_dir: Path = Path(".")) -> AppConfig:
             raise ConfigFileError(f"{code}.buffer = {buffer} 太大：不應超過目標價的 10%（{limit}）")
         rules.append(rule)
 
+    email_raw = data.get("email") or {}
+    if not isinstance(email_raw, dict):
+        raise ConfigFileError("email 格式不對")
+    _check_keys(email_raw, EMAIL_KEYS, "email")
+    daily_limit = email_raw.get("daily_limit", DEFAULT_DAILY_LIMIT)
+    if isinstance(daily_limit, bool) or not isinstance(daily_limit, int):
+        raise ConfigFileError("email.daily_limit 必須是整數")
+    if not 1 <= daily_limit <= MAX_DAILY_LIMIT:
+        raise ConfigFileError(f"email.daily_limit 必須介於 1 到 {MAX_DAILY_LIMIT}")
+
     data_dir = Path(str(data.get("data_dir", "data")))
     if not data_dir.is_absolute():
         data_dir = base_dir / data_dir
-    return AppConfig(data_dir=data_dir, hours=hours, rules=tuple(rules))
+    return AppConfig(data_dir=data_dir, hours=hours, rules=tuple(rules), daily_limit=daily_limit)
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):

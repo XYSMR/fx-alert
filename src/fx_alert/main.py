@@ -2,6 +2,7 @@
 
     python -m fx_alert check [--dry-run] [--force] [--config PATH]
     python -m fx_alert validate-config [--config PATH]
+    python -m fx_alert build-site [--config PATH] [--data-dir DIR] [--out site/data.json]
 
 check 每次執行：
   1. 不在檢查時段就直接結束（--force 可略過），什麼檔案都不寫
@@ -185,6 +186,23 @@ def _cmd_validate_config(args) -> int:
     return 0
 
 
+def _cmd_build_site(args) -> int:
+    from fx_alert.build_site import build_data, write_data_json
+    from fx_alert.state_store import StateError
+
+    try:
+        cfg = load_config(args.config)
+        data_dir = args.data_dir or cfg.data_dir
+        data = build_data(cfg, data_dir, now=datetime.now(TAIPEI))
+    except (ConfigFileError, StateError) as exc:
+        print(f"產生 data.json 失敗：{exc}", file=sys.stderr)
+        return 1
+    write_data_json(data, args.out)
+    codes = ", ".join(f"{c['code']} {c['rate']}" for c in data["currencies"])
+    print(f"已產生 {args.out}（{codes}；通知紀錄 {len(data['alerts'])} 筆）")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m fx_alert", description="匯率到價提醒")
     sub = ap.add_subparsers(dest="command", required=True)
@@ -198,6 +216,12 @@ def main(argv: list[str] | None = None) -> int:
     validate = sub.add_parser("validate-config", help="只驗證 config.yaml 格式")
     validate.add_argument("--config", type=Path, default=Path("config.yaml"))
     validate.set_defaults(func=_cmd_validate_config)
+
+    build = sub.add_parser("build-site", help="產生前端用的 data.json")
+    build.add_argument("--config", type=Path, default=Path("config.yaml"))
+    build.add_argument("--data-dir", type=Path, default=None, help="預設用 config 的 data_dir")
+    build.add_argument("--out", type=Path, default=Path("site/data.json"))
+    build.set_defaults(func=_cmd_build_site)
 
     args = ap.parse_args(argv)
     return args.func(args)

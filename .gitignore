@@ -8,3 +8,5 @@ __pycache__/
 # 狀態檔只放在 state 分支，main 上忽略
 state.json
 data/
+# 由 build-site 產生，部署時才建立
+site/data.json

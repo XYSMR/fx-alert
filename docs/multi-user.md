@@ -60,8 +60,8 @@
 | 4 | `feat/unsubscribe` | HMAC 簽章、Edge Function（Deno 測試）、確認頁、退訂 header；測試舊信連結仍有效、竄改的簽章被拒 |
 | 5 | `feat/frontend-auth` | Google 登入、我的提醒、我的通知紀錄、Email 開關；`AUTH_ENABLED` 開關（見下方） |
 | 6 | `feat/delete-account` | 刪除帳號 Edge Function（Auth 驗證 token、最近 10 分鐘內登入、確認文字）＋前端；排程與刪除同時發生時只略過該使用者；已刪除帳號點舊退訂連結顯示「已經不會再收到通知」；staging-check 的 `send` 選項 |
-| 7 | `feat/migrate-me` | 把 `config.yaml` 目標價、`state.json` 狀態、`alerts.csv` 搬到你的帳號 |
-| 8 | `chore/cutover` | 排程改 `--mode multi`、`data.json` 拿掉目標價與通知紀錄、刪 `MAIL_TO`、保活、隱私說明 |
+| 7 | `feat/migrate-me` | 搬家工具 `migrate-me` + `import_rules_for_user`（同一個交易；`--replace` 連通知紀錄一起覆蓋）；在 staging 演練 |
+| 8 | `chore/cutover` | 依下方「第 8 步：切換流程」執行：排程改 `--mode multi`、`data.json` 拿掉目標價與通知紀錄、`AUTH_ENABLED=true`、保活、隱私說明 |
 
 ### 第 5 步：前端登入（`site/account.js`）
 
@@ -104,3 +104,58 @@
 | 排程讀出規則後、寫入前，使用者刪除帳號 | `record_alert` 回傳 null（外鍵錯誤也會被接住並回復），排程只記一行 log、略過這個人；其他人照常，整次排程不算失敗。信可能已經寄出 |
 | 已刪除帳號的人點舊信的退訂連結 | Edge Function 回 200 `no_account`，確認頁顯示「你已經不會再收到通知」 |
 | 另一台裝置還登入著 | 讀不到自己的 profile、或寫入時外鍵錯誤 → 顯示「帳號已不存在，請重新登入」並自動登出 |
+
+### 第 7 步：搬家工具（`python -m fx_alert migrate-me`）
+
+```powershell
+# 只在自己的電腦執行（會印出 email，在 GitHub Actions 裡會拒絕）
+# secret key 只從環境變數讀，不讀也不寫任何 .env 檔
+$env:SUPABASE_URL = "https://<專案代號>.supabase.co"
+$env:SUPABASE_SECRET_KEY = "sb_secret_..."
+python -m fx_alert migrate-me --email <你的 Gmail> --data-dir <state 分支的資料夾> --dry-run
+python -m fx_alert migrate-me --email <你的 Gmail> --data-dir <state 分支的資料夾>
+```
+
+- 目標價、buffer 照 `config.yaml` 原值搬（不改成自動 0.5%）；狀態、時間、觸發時的目標價來自 `state.json`；通知紀錄來自 `alerts.csv`。
+- 寫入在同一個交易裡；帳號已經有提醒就拒絕，`--replace` 會在同一個交易裡先刪掉他的通知紀錄和規則再寫入（執行幾次結果都一樣）。
+- 寫完重新讀回來比對：數字用 Decimal（0.0250 = 0.025），時間轉成時間點（+08:00 和 UTC 是同一刻就相同）。
+
+### 第 8 步：切換流程（草稿，第 8 步開始前再確認一次）
+
+**切換前**
+
+- [ ] ⚠ **提醒使用者：決定韓元目標價**，更新 `config.yaml` 並合併（搬家會用這個值）
+- [ ] 正式專案設定完成：migrations、兩個 Edge Function（Verify JWT 關閉）、`UNSUBSCRIBE_SECRET`、Google 登入、Site URL / Redirect URLs
+- [ ] GitHub Secrets：`SUPABASE_URL`、`SUPABASE_SECRET_KEY`、`UNSUBSCRIBE_SECRET`（正式專案的值）
+- [ ] GitHub Variables：`SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`（正式專案）；`AUTH_ENABLED` 先維持未設定
+
+**切換**
+
+1. Actions → check-rates → **Disable workflow**（暫停單人版排程，state 分支從這一刻起不再變動）
+2. 本機用 Google 登入一次正式專案（建立 profile）
+3. 取出 state 分支：`git fetch origin state` → `git worktree add ../fx-state origin/state`
+4. `migrate-me --dry-run` 確認內容 → 正式搬家 → 比對必須完全一致
+5. 合併 `chore/cutover` PR（check-rates 改 `--mode multi`；`data.json` 不再含目標價與通知紀錄）
+6. Variables 設 `AUTH_ENABLED=true` → 重新部署 Pages → 確認沒登入看不到目標價、登入後看得到
+7. Enable check-rates → 手動 Run 一次 → 確認 log 只有規則編號、狀態正確
+
+**切換後**
+
+- [ ] **重新產生正式專案的 secret key**（Supabase → API Keys → 新增一把、更新 GitHub Secrets `SUPABASE_SECRET_KEY`、確認排程正常後刪除舊的）。搬家時這把 key 曾在本機環境變數出現過。
+- [ ] state 分支的 `state.json`、`alerts.csv` **保留不刪**（退回方案要用）
+- [ ] `MAIL_TO` 穩定運作一週後再刪（退回方案要用）
+
+**退回方案（切回單人模式）**
+
+1. Actions → check-rates → Disable workflow
+2. Variables：`AUTH_ENABLED` 刪除或設為 `false`（頁面立刻回到單人版顯示，不出現登入）
+3. 在 GitHub 對 `chore/cutover` 的合併按 **Revert**，開 PR 合併（check-rates 回到單人模式；`config.yaml` 的目標價仍在）
+4. 確認 `MAIL_TO` 還在（不在就加回）
+5. 狀態：state 分支停在切換那一刻。如果多人版期間有到價通知，對照 Supabase 的狀態手動更新 `state.json`；不更新的話，最壞情況是同一次到價再寄一封
+6. Enable check-rates → 手動 Run 一次（建議先勾 dry_run）→ 確認 log 與頁面正常
+
+### 待辦（第 8 步之後）
+
+- [ ] migration 和 Edge Function 改由 GitHub Actions 部署（`supabase db push`、`supabase functions deploy`），
+      並用 **GitHub Environments**：`staging` 自動部署、`production` 需要使用者核准
+- [ ] Actions 升級（Node 20 淘汰、ubuntu-latest 換版的警告）

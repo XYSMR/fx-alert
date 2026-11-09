@@ -268,6 +268,46 @@ def _cmd_unsubscribe_link(args) -> int:
     return 0
 
 
+def _cmd_migrate_me(args) -> int:
+    """單人版 → 多人版：把 config.yaml、state.json、alerts.csv 搬到自己的帳號。"""
+    from fx_alert.migrate import (
+        MigrationClient,
+        MigrationError,
+        collect,
+        compare,
+        describe,
+        mask_email,
+    )
+
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print("migrate-me 會印出 email，不能在公開的 GitHub Actions log 裡執行", file=sys.stderr)
+        return 1
+    who = mask_email(args.email)
+    try:
+        cfg = load_config(args.config)
+        plan = collect(cfg, args.data_dir or cfg.data_dir)
+        print(f"準備搬到 {who} 的帳號：")
+        print("\n".join(describe(plan)))
+        if args.dry_run:
+            print("（--dry-run：不寫入任何資料）")
+            return 0
+        client = MigrationClient(SupabaseConfig.from_env())  # secret key 只從環境變數讀
+        user_id = client.find_user(args.email)
+        result = client.import_plan(user_id, plan, replace=args.replace)
+        print(f"已寫入：規則 {result.get('rules')} 條、通知紀錄 {result.get('notifications')} 筆")
+        problems = compare(plan, client.fetch(user_id))
+    except (ConfigFileError, StoreError, MigrationError) as exc:
+        print(f"搬家失敗：{exc}", file=sys.stderr)
+        return 1
+    if problems:
+        print("比對不一致：", file=sys.stderr)
+        for p in problems:
+            print(f"  ✕ {p}", file=sys.stderr)
+        return 1
+    print("✓ 比對完全一致（目標價、buffer、狀態、時間、通知紀錄）")
+    return 0
+
+
 def _cmd_site_config(args) -> int:
     from fx_alert.site_config import SiteConfigError, write_site_config
 
@@ -335,6 +375,20 @@ def main(argv: list[str] | None = None) -> int:
     unsub = sub.add_parser("unsubscribe-link", help="（本機測試用）印出某個使用者的退訂連結")
     unsub.add_argument("--user-id", required=True, help="Supabase 使用者的 UUID")
     unsub.set_defaults(func=_cmd_unsubscribe_link)
+
+    mig = sub.add_parser("migrate-me", help="（本機）把單人版的設定搬到自己的 Supabase 帳號")
+    mig.add_argument("--email", required=True, help="你用來 Google 登入的 email")
+    mig.add_argument("--config", type=Path, default=Path("config.yaml"))
+    mig.add_argument(
+        "--data-dir", type=Path, default=None, help="state 分支的資料夾（有 state.json）"
+    )
+    mig.add_argument("--dry-run", action="store_true", help="只顯示要搬什麼，不寫入")
+    mig.add_argument(
+        "--replace",
+        action="store_true",
+        help="帳號已有提醒時，連同通知紀錄一起覆蓋（同一個交易）",
+    )
+    mig.set_defaults(func=_cmd_migrate_me)
 
     site_cfg = sub.add_parser(
         "site-config", help="產生前端的 config.js（讀 AUTH_ENABLED 等環境變數）"

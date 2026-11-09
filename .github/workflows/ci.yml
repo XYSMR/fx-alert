@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   validate-config:
+    name: validate-config
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -23,6 +24,15 @@ jobs:
       - run: python -m pip install .
       - name: Validate config.yaml
         run: python -m fx_alert validate-config
+
+      # 會被公開的檔案（前端、範例資料、設定檔）不能出現 email 或 SMTP 設定
+      - name: Check public files for secrets
+        run: |
+          if grep -rIlE '@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|SMTP_' site config.yaml --exclude-dir=vendor; then
+            echo "::error::上面這些檔案疑似包含 email 或 SMTP 設定"
+            exit 1
+          fi
+          echo "沒有發現 email 或 SMTP 字樣"
 
   test:
     runs-on: ubuntu-latest

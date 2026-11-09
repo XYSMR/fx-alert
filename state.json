@@ -1,0 +1,15 @@
+{
+  "currencies": {
+    "JPY": {
+      "changed_at": "2026-11-09T15:46:16+08:00",
+      "rate": "0.2119",
+      "state": "armed"
+    },
+    "KRW": {
+      "changed_at": "2026-11-09T15:46:16+08:00",
+      "rate": "0.0264",
+      "state": "armed"
+    }
+  },
+  "version": 1
+}

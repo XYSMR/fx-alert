@@ -3,6 +3,9 @@
 //   這裡負責「怎麼用白話說給使用者聽」，以及會跟著輸入變動的換匯試算。
 // - 一律用 textContent 放文字（不用 innerHTML），資料內容不會被當成 HTML 執行。
 // - 上半部都是純函式（不碰畫面），在 site/tests/app.test.js 測試。
+// - 登入功能（多人版）由 config.js 的 authEnabled 決定，見 bootPlan()：
+//     關閉：和單人版一樣，目標價、通知紀錄來自 data.json；不載入 supabase-js。
+//     開啟：沒登入只顯示公開行情；登入後由 account.js 從 Supabase 讀自己的目標價。
 "use strict";
 
 const STALE_AFTER_MINUTES = 120;
@@ -87,6 +90,22 @@ function rateHint(rate, name) {
  * 已通知的情況分三種：還在目標以下、回升但沒超過門檻、已超過門檻（等下次檢查）。
  */
 function cardView(c) {
+  if (c.target === null || c.target === undefined) {
+    // 沒有目標價（沒登入、或還沒設定）：只顯示行情
+    const details = c.rate_at ? [`匯率時間：${formatTime(c.rate_at)}`] : [];
+    return { badge: null, tone: "neutral", message: null, details };
+  }
+  if (c.paused) {
+    // 多人版：提醒停用、或整個 Email 通知關閉時，排程不檢查也不寄信
+    return {
+      badge: c.paused === "email" ? "通知已關閉" : "已停用",
+      tone: "neutral",
+      message: c.paused === "email"
+        ? "Email 到價通知已關閉，不會檢查也不會寄信"
+        : "這個提醒已停用，不會寄 Email",
+      details: c.rate_at ? [`匯率時間：${formatTime(c.rate_at)}`] : [],
+    };
+  }
   const rate = c.rate === null || c.rate === undefined ? null : Number(c.rate);
   const target = Number(c.target);
   const rearm = Number(c.rearm_above);
@@ -199,6 +218,9 @@ function converterView(twd, rate, target, name) {
   }
   if (twd === null) return { error: "請輸入台幣金額（例如 10000）" };
   const nowAmount = Math.round(twd / Number(rate));
+  if (target === null || target === undefined) {
+    return { nowLine: `約 ${numberFmt.format(nowAmount)} ${name}`, nowAmount, targetLine: null };
+  }
   const targetAmount = Math.round(twd / Number(target));
   const diff = targetAmount - nowAmount;
   let verdict;
@@ -220,7 +242,8 @@ function converterView(twd, rate, target, name) {
  * 並對齊到整齊的刻度間距（1、2、5 × 10ⁿ），避免出現 0.2032 這種刻度。
  */
 function yRange(rates, target) {
-  const values = [...rates.map(Number), Number(target)];
+  const values = rates.map(Number);
+  if (target !== null && target !== undefined) values.push(Number(target));
   const lo = Math.min(...values);
   const hi = Math.max(...values);
   const span = Math.max(hi - lo, hi * 0.01);
@@ -254,7 +277,40 @@ function chartSummary(c) {
     c.high && `最高 ${c.high.rate}（${formatDate(c.high.at)}）`,
     c.low && `最低 ${c.low.rate}（${formatDate(c.low.at)}）`,
   ].filter(Boolean).join("、");
-  return `${name}近 30 天：${extremes}，現在 ${c.rate}，你的目標 ${c.target}。`;
+  const goal = c.target === null || c.target === undefined ? "" : `，你的目標 ${c.target}`;
+  return `${name}近 30 天：${extremes}，現在 ${c.rate}${goal}。`;
+}
+
+// ---------- 登入開關（多人版） ----------
+
+/** config.js 的內容 → 要怎麼啟動頁面。關閉時不載入 supabase-js、不顯示登入、不連任何 Supabase */
+function bootPlan(cfg) {
+  const ok = Boolean(cfg && cfg.authEnabled === true &&
+    typeof cfg.supabaseUrl === "string" && typeof cfg.supabaseKey === "string" &&
+    /^(https:\/\/[a-z0-9]{20}\.supabase\.co|http:\/\/(127\.0\.0\.1|localhost):\d+)$/.test(cfg.supabaseUrl) &&
+    cfg.supabaseKey.startsWith("sb_publishable_"));
+  if (!ok) {
+    return { auth: null, loadSupabase: false, showLogin: false, targetsFromDataJson: true };
+  }
+  return {
+    auth: { url: cfg.supabaseUrl, key: cfg.supabaseKey },
+    loadSupabase: true,
+    showLogin: true,
+    targetsFromDataJson: false,
+  };
+}
+
+const PERSONAL_FIELDS = [
+  "target", "buffer", "rearm_above", "distance_pct", "status", "status_since", "paused",
+];
+
+/** 只留公開行情（多人版沒登入時用）：拿掉 data.json 裡任何個人設定 */
+function publicCurrencies(list) {
+  return list.map((c) => {
+    const copy = { ...c };
+    for (const k of PERSONAL_FIELDS) delete copy[k];
+    return copy;
+  });
 }
 
 // ====================================================================
@@ -284,26 +340,31 @@ function renderStatus(data, now) {
   box.replaceChildren(...parts);
 }
 
+let cardHint = null; // 沒有目標價時卡片下方的提示（例如「登入後可以設定目標價」）
+
 function renderCard(c) {
   const v = cardView(c);
   const card = el("article", { class: `card tone-${v.tone}` });
-  card.append(
-    el("header", { class: "card-head" },
-      el("h3", {}, c.name, " ", el("span", { class: "code" }, c.code)),
-      el("span", { class: `badge tone-${v.tone}` }, v.badge)),
+  const head = el("header", { class: "card-head" },
+    el("h3", {}, c.name, " ", el("span", { class: "code" }, c.code)));
+  if (v.badge) head.append(el("span", { class: `badge tone-${v.tone}` }, v.badge));
+  card.append(head,
     el("p", { class: "rate" }, c.rate ?? "—"),
-    el("p", { class: "hint" }, rateHint(c.rate, c.name)),
-    el("p", { class: "target" }, "你的目標 ", el("b", {}, c.target)),
-    el("p", { class: `message tone-${v.tone}` }, v.message),
-    el("details", {},
+    el("p", { class: "hint" }, rateHint(c.rate, c.name)));
+  const hasTarget = c.target !== null && c.target !== undefined;
+  if (hasTarget) card.append(el("p", { class: "target" }, "你的目標 ", el("b", {}, c.target)));
+  if (v.message) card.append(el("p", { class: `message tone-${v.tone}` }, v.message));
+  if (!hasTarget && cardHint) card.append(el("p", { class: "message" }, cardHint));
+  if (v.details.length) {
+    card.append(el("details", {},
       el("summary", {}, "詳細資訊"),
-      el("ul", {}, ...v.details.map((d) => el("li", {}, d)))),
-  );
+      el("ul", {}, ...v.details.map((d) => el("li", {}, d)))));
+  }
   return card;
 }
 
 /** 幣別頁籤（試算和走勢圖各一組，互不影響） */
-function renderTabs(box, currencies, onSelect) {
+function renderTabs(box, currencies, onSelect, selected = null) {
   const select = (code) => {
     for (const b of box.children) b.setAttribute("aria-selected", String(b.dataset.code === code));
     onSelect(currencies.find((c) => c.code === code));
@@ -313,7 +374,8 @@ function renderTabs(box, currencies, onSelect) {
     b.addEventListener("click", () => select(c.code));
     return b;
   }));
-  if (currencies.length) select(currencies[0].code);
+  if (!currencies.length) return;
+  select(currencies.some((c) => c.code === selected) ? selected : currencies[0].code);
 }
 
 // ---------- 換匯試算 ----------
@@ -335,10 +397,12 @@ function saveAmount(n) {
   }
 }
 
-function setupConverter(data) {
+let converterCode = null;
+
+function setupConverter(currencies) {
   const input = $("twd");
   let current = null;
-  input.value = numberFmt.format(loadAmount());
+  if (!input.value) input.value = numberFmt.format(loadAmount());
 
   const update = () => {
     if (!current) return;
@@ -353,19 +417,24 @@ function setupConverter(data) {
     }
     $("conv-now").textContent = v.nowLine;
     $("conv-now-rate").textContent = `（匯率 ${current.rate}）`;
+    const hasTarget = v.targetLine !== null;
+    $("conv-target-row").hidden = !hasTarget;
+    $("conv-verdict").hidden = !hasTarget;
+    if (!hasTarget) return;
     $("conv-target").textContent = v.targetLine;
     $("conv-target-rate").textContent = `（匯率 ${current.target}）`;
     $("conv-verdict").textContent = v.verdict;
   };
-  input.addEventListener("input", update);
-  input.addEventListener("blur", () => {
+  input.oninput = update; // 重畫時覆蓋，不會重複綁定
+  input.onblur = () => {
     const n = parseAmount(input.value);
     if (n !== null) input.value = numberFmt.format(n); // 離開輸入框時補上千分位
-  });
-  renderTabs($("conv-tabs"), data.currencies, (c) => {
+  };
+  renderTabs($("conv-tabs"), currencies, (c) => {
     current = c;
+    converterCode = c.code;
     update();
-  });
+  }, converterCode);
 }
 
 // ---------- 走勢圖 ----------
@@ -421,7 +490,7 @@ function drawChart(c) {
           pointBorderColor: rates.map((_, i) => (i === m.current ? "#fff" : COLORS.mark)),
           pointBorderWidth: rates.map((_, i) => (i === m.current ? 2 : 1)),
         },
-        {
+        ...(c.target === null || c.target === undefined ? [] : [{
           label: `你的目標 ${c.target}`,
           data: labels.map(() => Number(c.target)),
           borderColor: COLORS.target,
@@ -429,7 +498,7 @@ function drawChart(c) {
           borderDash: [6, 4],
           pointRadius: 0,
           pointHitRadius: 0,
-        },
+        }]),
       ],
     },
     options: {
@@ -453,7 +522,7 @@ function drawChart(c) {
           grid: { display: false },
         },
         y: {
-          min: range.min, // 一定包含目標價，「你的目標」那條線一定看得到
+          min: range.min, // 有目標價時一定包含它，「你的目標」那條線一定看得到
           max: range.max,
           ticks: { color: COLORS.text, stepSize: range.step, callback: (v) => Number(v).toFixed(4) },
           grid: { color: COLORS.grid },
@@ -487,9 +556,22 @@ function showError(message) {
   $("cards").replaceChildren();
 }
 
+let chartCode = null;
+
+/** 依目前的幣別資料重畫卡片、試算、走勢（登入／登出、修改目標價後都會呼叫） */
+function renderCurrencies(currencies) {
+  $("cards").replaceChildren(...currencies.map(renderCard));
+  setupConverter(currencies);
+  renderTabs($("chart-tabs"), currencies, (c) => {
+    chartCode = c.code;
+    drawChart(c);
+  }, chartCode);
+}
+
 async function main() {
   const now = previewNow(location.search) ?? new Date();
   if (previewNow(location.search)) $("preview-note").textContent = `（預覽時間：${formatTime(now.toISOString())}）`;
+  const plan = bootPlan(window.FX_CONFIG);
   const url = dataUrl(location.search);
   let data;
   try {
@@ -505,13 +587,29 @@ async function main() {
     return;
   }
   renderStatus(data, now);
-  $("cards").replaceChildren(...data.currencies.map(renderCard));
-  setupConverter(data);
-  renderTabs($("chart-tabs"), data.currencies, drawChart);
-  renderAlerts(data);
-  if (data.edit_config_url) $("edit-link").href = data.edit_config_url;
   if (data.repo_url) $("repo-link").href = data.repo_url;
   $("generated-at").textContent = formatTime(data.generated_at);
+
+  if (plan.targetsFromDataJson) {
+    // 登入功能關閉：和單人版完全一樣
+    renderCurrencies(data.currencies);
+    renderAlerts(data);
+    $("alerts-panel").hidden = false;
+    $("edit-panel").hidden = false;
+    if (data.edit_config_url) $("edit-link").href = data.edit_config_url;
+    return;
+  }
+
+  // 登入功能開啟：先畫公開行情，登入後由 account.js 加上自己的目標價
+  const publicList = publicCurrencies(data.currencies);
+  cardHint = "登入後可以設定目標價，到價時寄 Email 給你";
+  renderCurrencies(publicList);
+  if (window.FxAccount) {
+    window.FxAccount.start(plan.auth, publicList, (personal, loggedIn) => {
+      cardHint = loggedIn ? "在下方「我的提醒」設定目標價" : "登入後可以設定目標價，到價時寄 Email 給你";
+      renderCurrencies(personal);
+    });
+  }
 }
 
 // 瀏覽器裡直接執行；在 Node（測試）裡只匯出純函式
@@ -519,8 +617,9 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     dataUrl, previewNow, formatTime, formatDate, timeAgo, formatPct, rateHint, cardView,
     toMinutes, inCheckHours, nextCheck, isStale, statusLine, parseAmount, converterView,
-    yRange, markerIndexes, chartSummary,
+    yRange, markerIndexes, chartSummary, bootPlan, publicCurrencies,
   };
 } else {
+  window.FxApp = { formatTime };
   main();
 }

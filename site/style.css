@@ -117,6 +117,47 @@ details li + li { margin-top: 4px; }
 .button:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
 .edit .hint { margin-top: 12px; }
 
+/* ---------- 登入、我的提醒（多人版） ---------- */
+.title-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 16px; }
+.account { display: flex; align-items: center; gap: 10px; }
+.account .who { color: var(--muted); max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.primary {
+  font: inherit; font-weight: 700; padding: 8px 16px; border-radius: 10px;
+  border: 1px solid var(--blue); background: var(--blue); color: #fff; cursor: pointer;
+}
+button.primary:disabled { opacity: .6; cursor: wait; }
+button.link { font: inherit; border: 0; background: none; color: var(--blue); cursor: pointer; padding: 4px; text-decoration: underline; }
+button.link.danger { color: var(--red); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.email-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.email-switch label { display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }
+.email-switch input { width: 1.2em; height: 1.2em; }
+.email-switch .hint { flex-basis: 100%; }
+.pill { font-size: .85rem; font-weight: 600; padding: 2px 10px; border-radius: 999px; }
+.pill.on { background: var(--green-bg); color: var(--green); }
+.pill.off { background: var(--red-bg); color: var(--red); }
+
+.rule { padding: 14px 0; border-bottom: 1px solid var(--border); display: grid; gap: 8px; }
+.rule.add { border-bottom: 0; display: flex; flex-wrap: wrap; align-items: end; gap: 8px 14px; }
+.rule.add > strong { flex-basis: 100%; }
+.rule-main { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 16px; }
+.rule-name { font-size: 1.1rem; min-width: 3em; }
+.field { display: grid; gap: 2px; font-size: .9rem; color: var(--muted); }
+.field input, .field select {
+  font: inherit; font-size: 1.05rem; color: var(--text); font-variant-numeric: tabular-nums;
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; width: 12ch; background: var(--surface);
+}
+.check { display: flex; align-items: center; gap: 6px; padding-bottom: 8px; }
+.advanced { margin-top: 0; }
+.advanced .field { margin-top: 8px; }
+.advanced .field input { width: 18ch; }
+.rearm { margin-top: 6px; }
+.rule-actions { display: flex; gap: 12px; align-items: center; }
+.form-status { margin: 10px 0 0; font-weight: 600; min-height: 1.5em; }
+.form-status.ok { color: var(--green); }
+.form-status.error { color: var(--red); }
+
 /* ---------- 手機 ---------- */
 @media (max-width: 640px) {
   body { padding: 16px 12px 32px; }

@@ -58,15 +58,32 @@
 | 2 | `feat/rule-store` | 狀態存取抽成介面：`FileStore`（現在）、`SupabaseStore`（新） |
 | 3 | `feat/multi-user-check` | `--mode single/multi`；規則從 view `active_rules` 讀（排除 Email 關閉的人與停用的規則）；每日寄信上限 `email.daily_limit`；多人版 `--dry-run` 只讀；錯誤訊息遮蔽 email；手動的 `staging-check` workflow |
 | 4 | `feat/unsubscribe` | HMAC 簽章、Edge Function（Deno 測試）、確認頁、退訂 header；測試舊信連結仍有效、竄改的簽章被拒 |
-| 5 | `feat/frontend-auth` | 見下方 |
+| 5 | `feat/frontend-auth` | Google 登入、我的提醒、我的通知紀錄、Email 開關；`AUTH_ENABLED` 開關（見下方） |
 | 6 | `feat/delete-account` | 刪除帳號 Edge Function（驗證使用者 JWT → 用 secret key 刪除）＋前端按鈕 |
 | 7 | `feat/migrate-me` | 把 `config.yaml` 目標價、`state.json` 狀態、`alerts.csv` 搬到你的帳號 |
 | 8 | `chore/cutover` | 排程改 `--mode multi`、`data.json` 拿掉目標價與通知紀錄、刪 `MAIL_TO`、保活、隱私說明 |
 
-### 第 5 步：前端和介面改版的整合
+### 第 5 步：前端登入（`site/account.js`）
 
-- **沒登入**：卡片只顯示匯率、更新時間、30 天走勢、換匯試算；不顯示任何目標價。
-- **登入後**：同一張卡片多出「你的目標」、「還要再跌 X%」或已通知的狀態說明，
-  走勢圖加上目標線，換匯試算多一行「用目標價換可以拿到多少」的比較；另有「我的提醒」設定和通知紀錄。
-- 目標價、狀態從 Supabase 讀（RLS 保證只拿得到自己的），`data.json` 只提供公開行情。
-- 設定頁：幣別、目標價、啟用開關；「進階設定」裡才有 buffer（留空 = 目標價的 0.5%）。
+**登入功能開關**（GitHub → Settings → Secrets and variables → Actions → **Variables**）：
+
+| Variable | 說明 |
+|---|---|
+| `AUTH_ENABLED` | `true` 才開啟；其他值或沒設定 = 關閉 |
+| `SUPABASE_URL` | `https://<專案代號>.supabase.co` |
+| `SUPABASE_PUBLISHABLE_KEY` | `sb_publishable_…`（本來就公開；`sb_secret_…` 會被拒絕） |
+
+部署時 `python -m fx_alert site-config` 產生 `config.js`：
+
+- **關閉**：`config.js` 只有 `{"authEnabled": false}`，不含任何 Supabase 網址或金鑰；
+  頁面和單人版完全一樣（目標價、通知紀錄來自 `data.json`），不出現登入按鈕，不載入 supabase-js。
+- **開啟**：沒登入只顯示公開行情；登入後從 Supabase 讀自己的目標價、狀態、通知紀錄（RLS 保證只拿得到自己的）。
+
+正式網站在第 8 步切換前維持關閉；第 5 步的登入功能在本機驗證。
+
+設定頁：
+- 卡片用語和介面改版一致（「你的目標 0.205」）。
+- 進階設定的回升門檻用白話說明：「匯率回升到 0.2061 以上，才會再提醒你」（銀行報價的位數，
+  比「目標 + 門檻」大的最小報價，和排程的「匯率 > 目標 + 門檻」一致）。
+- 目標價和現價差超過 30% 時，存檔前再確認一次（防止打錯小數點）。
+- 新增提醒的幣別選單只列出還沒設定過的幣別。

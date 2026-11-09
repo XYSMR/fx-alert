@@ -129,3 +129,31 @@ def test_unchanged_run_does_not_touch_file(path):
     assert save_states(path, states) is True
     states = with_transition(load_states(path), "JPY", TRIG, D("0.2030"), NOW + timedelta(hours=1))
     assert save_states(path, states) is False
+
+
+# ---------- 記錄觸發當時的目標價 ----------
+
+
+def test_transition_records_target(path):
+    from fx_alert.state_store import target_at_transition
+
+    states = with_transition({}, "JPY", TRIG, D("0.2049"), NOW, target=D("0.205"))
+    save_states(path, states)
+    loaded = load_states(path)
+    assert loaded["JPY"].target == "0.205"
+    assert target_at_transition(loaded, "JPY") == D("0.205")
+    assert json.loads(path.read_text())["currencies"]["JPY"]["target"] == "0.205"
+
+
+def test_old_state_file_without_target_still_loads(path):
+    from fx_alert.state_store import target_at_transition
+
+    path.write_text(
+        '{"version": 1, "currencies": {"JPY": '
+        '{"state": "armed", "changed_at": "2026-11-09T15:46:16+08:00", "rate": "0.2119"}}}',
+        encoding="utf-8",
+    )
+    states = load_states(path)
+    assert states["JPY"].target is None
+    assert target_at_transition(states, "JPY") is None
+    assert target_at_transition(states, "KRW") is None

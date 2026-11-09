@@ -4,7 +4,8 @@
 
     {
       "currencies": {
-        "JPY": {"changed_at": "2026-11-09T10:07:00+08:00", "rate": "0.2049", "state": "triggered"}
+        "JPY": {"changed_at": "2026-11-09T10:07:00+08:00", "rate": "0.2049",
+                "state": "triggered", "target": "0.205"}
       },
       "version": 1
     }
@@ -12,7 +13,7 @@
 設計重點：
 - 檔案不存在 = 第一次執行，回傳空字典（每個幣別都會被視為待命）。
 - 檔案壞掉時「拋錯」而不是悄悄重置：重置會讓已通知的幣別又寄一次信，寧可讓排程失敗、被看見。
-- 只在狀態「轉換」時記錄時間和匯率，所以平常執行內容不變 → save 回傳 False → 不需要 commit。
+- 只在狀態「轉換」時記錄時間、匯率和當時的目標價（target 為選填，舊檔案沒有也能讀）。
 - 先寫暫存檔再 os.replace，寫到一半中斷也不會留下半個檔案。
 """
 
@@ -39,6 +40,7 @@ class CurrencyState:
     state: AlertState
     changed_at: str  # ISO 8601，狀態最後一次轉換的時間
     rate: str  # 轉換當下的匯率（字串保存，避免精度問題）
+    target: str | None = None  # 轉換當下的目標價；用來偵測「目標價被改過」
 
 
 States = dict[str, CurrencyState]
@@ -68,6 +70,7 @@ def load_states(path: Path) -> States:
                 state=AlertState(entry["state"]),
                 changed_at=str(entry["changed_at"]),
                 rate=str(entry["rate"]),
+                target=None if entry.get("target") is None else str(entry["target"]),
             )
         except (KeyError, ValueError) as exc:
             raise StateError(f"{code} 的狀態內容不合法：{entry!r}") from exc
@@ -78,12 +81,16 @@ def dumps_states(states: States) -> str:
     """序列化成固定格式的文字（同樣內容一定產生同樣文字）。"""
     payload = {
         "version": FORMAT_VERSION,
-        "currencies": {
-            code: {"state": s.state.value, "changed_at": s.changed_at, "rate": s.rate}
-            for code, s in states.items()
-        },
+        "currencies": {code: _entry(s) for code, s in states.items()},
     }
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+def _entry(s: CurrencyState) -> dict[str, str]:
+    d = {"state": s.state.value, "changed_at": s.changed_at, "rate": s.rate}
+    if s.target is not None:
+        d["target"] = s.target
+    return d
 
 
 def save_states(path: Path, states: States) -> bool:
@@ -106,13 +113,27 @@ def current(states: States, currency: str) -> AlertState | None:
     return entry.state if entry else None
 
 
+def target_at_transition(states: States, currency: str) -> Decimal | None:
+    """進入目前狀態時的目標價；沒有紀錄（或舊格式）回傳 None。"""
+    entry = states.get(currency)
+    return Decimal(entry.target) if entry and entry.target is not None else None
+
+
 def with_transition(
-    states: States, currency: str, new_state: AlertState, rate: Decimal, now: datetime
+    states: States,
+    currency: str,
+    new_state: AlertState,
+    rate: Decimal,
+    now: datetime,
+    target: Decimal | None = None,
 ) -> States:
     """回傳套用新狀態後的「新字典」；狀態沒變就原樣回傳（不更新時間）。"""
     if current(states, currency) is new_state:
         return states
     entry = CurrencyState(
-        state=new_state, changed_at=now.isoformat(timespec="seconds"), rate=str(rate)
+        state=new_state,
+        changed_at=now.isoformat(timespec="seconds"),
+        rate=str(rate),
+        target=None if target is None else str(target),
     )
     return {**states, currency: entry}

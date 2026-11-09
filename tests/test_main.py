@@ -8,6 +8,7 @@ import pytest
 from fx_alert import main as main_mod
 from fx_alert.config import TAIPEI, AppConfig, BusinessHours
 from fx_alert.fetcher import FetchError
+from fx_alert.history import read_alerts, read_last_check, read_quotes
 from fx_alert.notifier import DryRunNotifier, EmailConfig, NotifyError
 from fx_alert.rules import AlertState, Rule
 from fx_alert.state_store import load_states, save_states
@@ -22,7 +23,7 @@ def make_cfg(tmp_path, krw_target="0.0250"):
     from datetime import time
 
     return AppConfig(
-        state_file=tmp_path / "state.json",
+        data_dir=tmp_path / "data",
         hours=BusinessHours(weekdays_only=True, start=time(9, 0), end=time(16, 30)),
         rules=(
             Rule("JPY", target=D("0.205"), buffer=D("0.001")),
@@ -137,7 +138,7 @@ def test_outside_hours_is_skipped(tmp_path):
 
     r = check(cfg, n, now=SATURDAY, fetch=must_not_fetch)
     assert r.skipped and r.exit_code == 0
-    assert not cfg.state_file.exists()
+    assert not cfg.data_dir.exists()  # 什麼都不寫 → workflow 不會 commit
 
 
 def test_force_ignores_hours(tmp_path):
@@ -167,6 +168,7 @@ def test_fetch_or_parse_error_leaves_state_untouched(tmp_path, fetch_exc_or_text
 
 def test_corrupt_state_stops_everything(tmp_path):
     cfg, n = make_cfg(tmp_path), DryRunNotifier()
+    cfg.data_dir.mkdir()
     cfg.state_file.write_text("{broken", encoding="utf-8")
     r = check(cfg, n, fetch=lambda: mega_json(jpy="0.2040"))
     assert r.exit_code == 1 and n.sent == []
@@ -192,7 +194,7 @@ def test_cli_dry_run_end_to_end(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "[dry-run]" in out and "JPY 到價" in out
     assert out_file.read_text(encoding="utf-8") == "state_changed=true\n"
-    assert load_states(tmp_path / "state.json")["JPY"].state is AlertState.TRIGGERED
+    assert load_states(tmp_path / "data" / "state.json")["JPY"].state is AlertState.TRIGGERED
 
 
 def test_cli_without_email_env_fails_fast(tmp_path, monkeypatch, capsys):
@@ -215,3 +217,107 @@ def test_state_file_written_by_run_is_loadable(tmp_path):
     save_states(cfg.state_file, {})
     check(cfg, DryRunNotifier(), fetch=lambda: mega_json(jpy="0.2040"))
     assert load_states(cfg.state_file)["JPY"].rate == "0.2040"
+
+
+# ---------- 走勢、通知紀錄、最後檢查 ----------
+
+
+def test_history_recorded_once_per_quote(tmp_path):
+    cfg, n = make_cfg(tmp_path), DryRunNotifier()
+    check(cfg, n, fetch=lambda: mega_json())
+    check(cfg, n, fetch=lambda: mega_json())  # 同一份牌告
+    quotes = read_quotes(cfg.data_dir, datetime(2026, 11, 1, tzinfo=TAIPEI))
+    assert [(q.currency, str(q.cash_sell)) for q in quotes] == [
+        ("JPY", "0.2105"),
+        ("KRW", "0.0260"),
+    ]
+
+
+def test_alert_logged_only_when_send_succeeds(tmp_path):
+    cfg = make_cfg(tmp_path)
+    check(cfg, FailingNotifier(fail_for=("JPY",)), fetch=lambda: mega_json(jpy="0.2040"))
+    assert read_alerts(cfg.data_dir) == []
+    check(cfg, DryRunNotifier(), fetch=lambda: mega_json(jpy="0.2040"))
+    alerts = read_alerts(cfg.data_dir)
+    assert [(a.currency, str(a.rate), str(a.target)) for a in alerts] == [
+        ("JPY", "0.2040", "0.205")
+    ]
+
+
+def test_last_check_written_on_success_and_failure(tmp_path):
+    cfg, n = make_cfg(tmp_path), DryRunNotifier()
+    check(cfg, n, fetch=lambda: mega_json())
+    assert read_last_check(cfg.data_dir) == {
+        "at": "2026-11-09T10:07:00+08:00",
+        "ok": True,
+        "errors": 0,
+    }
+
+    def boom():
+        raise FetchError("timeout")
+
+    check(cfg, n, fetch=boom)
+    assert read_last_check(cfg.data_dir)["ok"] is False
+    assert read_last_check(cfg.data_dir)["errors"] == 1
+
+
+def test_public_files_never_contain_email_or_error_text(tmp_path):
+    cfg = make_cfg(tmp_path)
+    check(cfg, FailingNotifier(fail_for=("JPY",)), fetch=lambda: mega_json(jpy="0.2040"))
+    check(cfg, DryRunNotifier(), fetch=lambda: mega_json(jpy="0.2040"))
+    for p in cfg.data_dir.rglob("*.*"):
+        text = p.read_text(encoding="utf-8")
+        assert "@" not in text and "SMTP" not in text, p
+
+
+# ---------- 修改目標價（端對端） ----------
+
+
+def with_target(cfg, jpy_target):
+    from dataclasses import replace
+
+    rules = (Rule("JPY", target=D(jpy_target), buffer=D("0.001")), cfg.rules[1])
+    return replace(cfg, rules=rules)
+
+
+def test_lowering_target_while_triggered_returns_to_waiting_then_notifies_again(tmp_path):
+    cfg, n = make_cfg(tmp_path), DryRunNotifier()
+    check(cfg, n, fetch=lambda: mega_json(jpy="0.2049"))  # 0.205 到價 → triggered
+    assert load_states(cfg.state_file)["JPY"].target == "0.205"
+
+    lowered = with_target(cfg, "0.203")  # 使用者把目標改低
+    r = check(lowered, n, fetch=lambda: mega_json(jpy="0.2049"))
+    assert r.notified == []
+    assert load_states(cfg.state_file)["JPY"].state is AlertState.ARMED  # 回到等待中
+
+    r = check(lowered, n, fetch=lambda: mega_json(jpy="0.2030"))  # 跌到新目標
+    assert r.notified == ["JPY"]
+    assert len(n.sent) == 2
+
+
+def test_state_from_before_this_change_without_target_still_works(tmp_path):
+    cfg, n = make_cfg(tmp_path), DryRunNotifier()
+    cfg.data_dir.mkdir()
+    cfg.state_file.write_text(
+        '{"version": 1, "currencies": {"JPY": {"state": "armed", '
+        '"changed_at": "2026-11-09T15:46:16+08:00", "rate": "0.2119"}}}',
+        encoding="utf-8",
+    )
+    r = check(cfg, n, fetch=lambda: mega_json(jpy="0.2040"))
+    assert r.notified == ["JPY"]
+
+
+# ---------- validate-config ----------
+
+
+def test_cli_validate_config_ok(capsys):
+    assert main_mod.main(["validate-config", "--config", str(ROOT / "config.yaml")]) == 0
+    out = capsys.readouterr().out
+    assert "驗證通過" in out and "JPY: 目標 ≤ 0.205" in out
+
+
+def test_cli_validate_config_fails(tmp_path, capsys):
+    bad = tmp_path / "c.yaml"
+    bad.write_text("currencies:\n  JPY:\n    target: '-1'\n", encoding="utf-8")
+    assert main_mod.main(["validate-config", "--config", str(bad)]) == 1
+    assert "驗證失敗" in capsys.readouterr().err

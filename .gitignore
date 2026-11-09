@@ -7,3 +7,4 @@ __pycache__/
 .env
 # 狀態檔只放在 state 分支，main 上忽略
 state.json
+data/

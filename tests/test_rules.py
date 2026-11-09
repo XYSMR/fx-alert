@@ -133,3 +133,47 @@ def test_decide_rejects_bad_rate(rate, exc):
 def test_state_values_are_json_friendly():
     assert AlertState("armed") is ARMED
     assert TRIG.value == "triggered"
+
+
+# ---------- 修改目標價 ----------
+
+
+def test_target_changed_while_triggered_and_rate_above_new_target_rearms():
+    # 在 0.205 觸發（現價 0.2049）→ 使用者把目標改成 0.203 → 現價高於新目標 → 回到待命，不寄信
+    new_rule = Rule("JPY", target=D("0.203"), buffer=D("0.001"))
+    d = decide(new_rule, D("0.2049"), TRIG, prev_target=D("0.205"))
+    assert d == Decision(ARMED, False)
+    assert "目標已調整" in d.reason
+
+
+def test_target_changed_rearm_ignores_buffer():
+    # 現價 0.2035 只比新目標 0.203 高一點（在 buffer 內），仍然要回到待命
+    new_rule = Rule("JPY", target=D("0.203"), buffer=D("0.001"))
+    assert decide(new_rule, D("0.2035"), TRIG, prev_target=D("0.205")).next_state is ARMED
+
+
+def test_target_changed_but_rate_still_at_or_below_new_target_stays_triggered():
+    # 改了目標，但現價已經 ≤ 新目標：這次到價已通知過，不重寄
+    new_rule = Rule("JPY", target=D("0.2045"), buffer=D("0.001"))
+    assert decide(new_rule, D("0.2040"), TRIG, prev_target=D("0.205")) == Decision(TRIG, False)
+
+
+def test_after_target_change_rearm_next_drop_notifies():
+    new_rule = Rule("JPY", target=D("0.203"), buffer=D("0.001"))
+    state = decide(new_rule, D("0.2049"), TRIG, prev_target=D("0.205")).next_state
+    assert decide(new_rule, D("0.2030"), state).notify is True
+
+
+def test_same_target_keeps_buffer_behaviour():
+    assert decide(JPY, D("0.2055"), TRIG, prev_target=D("0.205")) == Decision(TRIG, False)
+
+
+def test_unknown_previous_target_keeps_old_behaviour():
+    # 舊的 state.json 沒有 target 欄位 → 照原本的 buffer 規則
+    new_rule = Rule("JPY", target=D("0.203"), buffer=D("0.001"))
+    assert decide(new_rule, D("0.2035"), TRIG, prev_target=None).next_state is TRIG
+
+
+def test_target_change_while_armed_has_no_special_effect():
+    new_rule = Rule("JPY", target=D("0.210"), buffer=D("0.001"))
+    assert decide(new_rule, D("0.2099"), ARMED, prev_target=D("0.205")) == Decision(TRIG, True)

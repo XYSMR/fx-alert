@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def base(**over):
     data = {
-        "state_file": "state.json",
+        "data_dir": "data",
         "business_hours": {"weekdays_only": True, "start": "09:00", "end": "16:30"},
         "currencies": {"JPY": {"target": "0.205", "buffer": "0.001"}},
     }
@@ -21,11 +21,11 @@ def base(**over):
 
 def test_repo_config_yaml_is_valid():
     cfg = load_config(ROOT / "config.yaml")
-    codes = [r.currency for r in cfg.rules]
-    assert codes == ["JPY", "KRW"]
+    assert [r.currency for r in cfg.rules] == ["JPY", "KRW"]
     jpy = cfg.rules[0]
     assert (jpy.target, jpy.buffer) == (D("0.205"), D("0.001"))
-    assert cfg.state_file == ROOT / "state.json"
+    assert cfg.data_dir == ROOT / "data"
+    assert cfg.state_file == ROOT / "data" / "state.json"
 
 
 def test_yaml_floats_become_exact_decimals(tmp_path):
@@ -35,29 +35,59 @@ def test_yaml_floats_become_exact_decimals(tmp_path):
     assert rule.target == D("0.205") and rule.buffer == D("0.001")
 
 
-def test_lowercase_code_and_default_buffer():
-    cfg = parse_config(base(currencies={"jpy": {"target": "0.2"}}))
-    assert cfg.rules[0].currency == "JPY"
-    assert cfg.rules[0].buffer == D("0")
+def test_default_buffer_is_zero():
+    assert parse_config(base(currencies={"JPY": {"target": "0.2"}})).rules[0].buffer == D("0")
+
+
+# ---------- CI 用的格式驗證：失敗就不能合併、不能部署 ----------
 
 
 @pytest.mark.parametrize(
     ("data", "msg"),
     [
         ([], "最外層"),
+        (base(state_fle="x"), "不認得的欄位：state_fle"),
         (base(currencies={}), "至少"),
+        # 幣別代碼
+        (base(currencies={"XYZ": {"target": "1"}}), "不支援的幣別代碼：XYZ"),
+        (base(currencies={"jpy": {"target": "0.2"}}), "要大寫"),
+        (base(currencies={"JPYY": {"target": "0.2"}}), "不支援"),
+        # 目標價
         (base(currencies={"JPY": {}}), "target"),
         (base(currencies={"JPY": {"target": "abc"}}), "不是合法的數字"),
+        (base(currencies={"JPY": {"target": "NaN"}}), "不是合法的數字"),
         (base(currencies={"JPY": {"target": True}}), "必須是數字"),
+        (base(currencies={"JPY": {"target": None}}), "必須是數字"),
         (base(currencies={"JPY": {"target": "0"}}), "大於 0"),
-        (base(currencies={"JPY": {"target": "0.2", "buffer": "-1"}}), "負數"),
+        (base(currencies={"JPY": {"target": "-0.2"}}), "大於 0"),
+        # buffer
+        (base(currencies={"JPY": {"target": "0.2", "buffer": "-0.001"}}), "負數"),
+        (base(currencies={"JPY": {"target": "0.205", "buffer": "0.03"}}), "10%"),
+        (base(currencies={"JPY": {"target": "0.2", "bufer": "0.001"}}), "不認得的欄位：bufer"),
+        # 檢查時段
         (base(business_hours={"start": "9點"}), "HH:MM"),
         (base(business_hours={"start": "17:00", "end": "09:00"}), "早於"),
+        (base(business_hours={"weekdays_only": "yes"}), "true 或 false"),
+        (base(business_hours={"weekday_only": True}), "不認得的欄位"),
     ],
 )
 def test_invalid_config(data, msg):
     with pytest.raises(ConfigFileError, match=msg):
         parse_config(data)
+
+
+def test_buffer_exactly_10_percent_is_allowed():
+    rule = parse_config(base(currencies={"JPY": {"target": "0.2", "buffer": "0.02"}})).rules[0]
+    assert rule.buffer == D("0.02")
+
+
+def test_duplicate_currency_in_yaml_is_rejected(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text(
+        "currencies:\n  JPY:\n    target: '0.205'\n  JPY:\n    target: '0.3'\n", encoding="utf-8"
+    )
+    with pytest.raises(ConfigFileError, match="重複的欄位 JPY"):
+        load_config(p)
 
 
 def test_invalid_yaml_file(tmp_path):

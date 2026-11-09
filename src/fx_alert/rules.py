@@ -10,6 +10,8 @@
 - TRIGGERED（已通知）：這次到價已經寄過信，不再重複寄。
 - 沒有前一個狀態（第一次執行）視為 ARMED，所以一開始就低於目標也會通知。
 - 介於 (target, target + buffer] 的匯率不改變狀態，避免在目標附近來回跳時一直重寄。
+- 修改目標價：已通知（TRIGGERED）時若目標價改了、而且現價高於「新」目標，
+  直接回到待命（不寄信），下次跌到新目標才再通知。觸發時的目標價由呼叫端傳入 prev_target。
 
 「寄信成功才更新狀態」由呼叫端負責：decide() 只回傳「如果這次通知成功，下一個狀態是什麼」，
 呼叫端寄信失敗時就不要把 next_state 存起來，下次執行會得到同樣的結果、再試一次。
@@ -17,7 +19,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 
@@ -50,10 +52,19 @@ class Rule:
 class Decision:
     next_state: AlertState
     notify: bool
+    reason: str = field(default="", compare=False)  # 給 log 看的說明，不影響相等比較
 
 
-def decide(rule: Rule, rate: Decimal, prev: AlertState | None) -> Decision:
-    """根據這次的匯率和上一個狀態，決定要不要通知、下一個狀態是什麼。"""
+def decide(
+    rule: Rule,
+    rate: Decimal,
+    prev: AlertState | None,
+    prev_target: Decimal | None = None,
+) -> Decision:
+    """根據這次的匯率和上一個狀態，決定要不要通知、下一個狀態是什麼。
+
+    prev_target：進入目前狀態時的目標價（沒有紀錄就是 None，維持原本行為）。
+    """
     if not isinstance(rate, Decimal):
         raise TypeError("rate 必須是 Decimal")
     if rate <= 0:
@@ -63,10 +74,15 @@ def decide(rule: Rule, rate: Decimal, prev: AlertState | None) -> Decision:
 
     if state is AlertState.ARMED:
         if rate <= rule.target:
-            return Decision(AlertState.TRIGGERED, notify=True)
-        return Decision(AlertState.ARMED, notify=False)
+            return Decision(AlertState.TRIGGERED, notify=True, reason="到價")
+        return Decision(AlertState.ARMED, notify=False, reason="尚未到價")
 
     # TRIGGERED
+    target_changed = prev_target is not None and prev_target != rule.target
+    if target_changed and rate > rule.target:
+        return Decision(
+            AlertState.ARMED, notify=False, reason="目標已調整且現價高於新目標，重新上膛"
+        )
     if rate > rule.rearm_above:
-        return Decision(AlertState.ARMED, notify=False)
-    return Decision(AlertState.TRIGGERED, notify=False)
+        return Decision(AlertState.ARMED, notify=False, reason="回升超過 buffer，重新上膛")
+    return Decision(AlertState.TRIGGERED, notify=False, reason="已通知過，不重複寄")

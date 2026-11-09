@@ -1,4 +1,4 @@
-# CI：每次 push 到 main 或開 PR，都跑 lint 和測試。
+# CI：每次 push 到 main 或開 PR，都驗證 config.yaml、跑 lint 和測試。
 name: ci
 
 on:
@@ -10,6 +10,20 @@ permissions:
   contents: read
 
 jobs:
+  validate-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install .
+      - name: Validate config.yaml
+        run: python -m fx_alert validate-config
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10

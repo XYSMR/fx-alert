@@ -5,7 +5,13 @@ from decimal import Decimal as D
 import pytest
 
 from fx_alert import main as main_mod
-from fx_alert.build_site import build_data, distance_pct, write_data_json
+from fx_alert.build_site import (
+    PERSONAL_FIELDS,
+    build_data,
+    distance_pct,
+    public_problems,
+    write_data_json,
+)
 from fx_alert.config import TAIPEI, AppConfig, BusinessHours
 from fx_alert.history import append_alert, append_quotes, write_last_check
 from fx_alert.rules import AlertState, Rule
@@ -253,3 +259,56 @@ def test_first_check_matches_workflow_cron():
         encoding="utf-8"
     )
     assert f'cron: "{SCHEDULE_OFFSET_MINUTES},{SCHEDULE_OFFSET_MINUTES + 30} 1-7 * * 1-5"' in wf
+
+
+# ---------- 公開版（多人版：AUTH_ENABLED=true 時部署用） ----------
+
+
+def test_public_data_has_no_personal_settings(cfg):
+    seed(cfg)
+    full = build_data(cfg, cfg.data_dir, now=NOW, repo="XYSMR/fx-alert")
+    data = build_data(cfg, cfg.data_dir, now=NOW, repo="XYSMR/fx-alert", public=True)
+    assert public_problems(data) == []
+    assert public_problems(full) != []  # 檢查本身有效：完整版一定會被抓到
+    text = json.dumps(data, ensure_ascii=False)
+    for word in ("0.205", "0.0250", "target", "triggered", "edit/main/config.yaml"):
+        assert word not in text, word
+    assert data["alerts"] == []
+
+
+def test_public_data_keeps_public_market_data(cfg):
+    seed(cfg)
+    full = build_data(cfg, cfg.data_dir, now=NOW, repo="XYSMR/fx-alert")
+    data = build_data(cfg, cfg.data_dir, now=NOW, repo="XYSMR/fx-alert", public=True)
+    for pub, ful in zip(data["currencies"], full["currencies"], strict=True):
+        for k in ("code", "name", "rate", "rate_at", "high", "low", "history"):
+            assert pub[k] == ful[k], k
+    for k in ("schema", "generated_at", "last_check", "quoted_at", "source", "business_hours"):
+        assert data[k] == full[k], k
+
+
+def test_public_fields_match_frontend_list():
+    """前端 publicCurrencies 拿掉的欄位，必須涵蓋這裡公開版拿掉的欄位。"""
+    import re
+    from pathlib import Path
+
+    js = (Path(__file__).resolve().parents[1] / "site/app.js").read_text(encoding="utf-8")
+    block = re.search(r"const PERSONAL_FIELDS = \[(.*?)\];", js, re.S).group(1)
+    frontend = set(re.findall(r'"(\w+)"', block))
+    assert set(PERSONAL_FIELDS) <= frontend
+
+
+def test_cli_build_site_public(cfg, tmp_path, capsys):
+    seed(cfg)
+    conf = tmp_path / "config.yaml"
+    conf.write_text(
+        f"data_dir: {cfg.data_dir.as_posix()}\n"
+        "currencies:\n  JPY: {target: '0.205', buffer: '0.001'}\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "site" / "data.json"
+    args = ["build-site", "--config", str(conf), "--out", str(out), "--public"]
+    assert main_mod.main(args) == 0
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert public_problems(data) == []
+    assert "公開版" in capsys.readouterr().out

@@ -163,7 +163,11 @@ python -m fx_alert migrate-me --email <你的 Gmail> --data-dir <state 分支的
 3. localhost 用 Google 登入正式專案（建立 profile）
 4. `git fetch origin state` → `git worktree add ..\fx-state origin/state`
 5. `$env:SUPABASE_SECRET_KEY` 提供金鑰；`migrate-me --dry-run` → 正式搬家 → 比對必須完全一致
-6. 合併 `chore/cutover` PR
+6. 合併 `chore/cutover` PR：
+   - check-rates 改用 `--mode multi`（收件人來自 Supabase，不再用 `MAIL_TO`），commit 前檢查 state 分支沒有 email
+   - `AUTH_ENABLED=true` 時 `build-site --public`：data.json 只有公開行情，部署前再檢查一次
+   - 新增 keepalive（每週日用 publishable key 讀一次公開的幣別清單，避免 Supabase 免費專案暫停）
+   - 新增隱私說明頁 `privacy.html`（登入功能開啟時首頁頁尾才出現連結）
 7. Variables 設 `AUTH_ENABLED=true` → 重新部署 Pages → 確認可以登入、只看得到自己的規則
 8. Enable check-rates → 手動 Run 一次 → 確認 log 沒有 email
 
@@ -174,6 +178,7 @@ python -m fx_alert migrate-me --email <你的 Gmail> --data-dir <state 分支的
 - [ ] C3 **輪替 secret key**：建兩把新的 → 更新 GitHub Secret `SUPABASE_SECRET_KEY` 和 Edge Function Secret `FX_SECRET_KEY`
       → 冒煙測試 + 手動 Run check-rates → 刪除舊的兩把 → **再跑一次冒煙測試**（確認沒有地方還在用舊 key）
 - [ ] C4 `state.json`、`alerts.csv` 保留；`MAIL_TO` 一週後再刪
+- [ ] C5 一週後（確定不退回）：`config.yaml` 的目標價只剩退回方案在用，要不要從公開的 repo 拿掉再決定
 
 #### D. 退回方案（切回單人模式）
 

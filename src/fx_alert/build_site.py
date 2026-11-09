@@ -1,6 +1,11 @@
 """產生前端用的 data.json。
 
     python -m fx_alert build-site [--config config.yaml] [--data-dir data] [--out site/data.json]
+                                  [--public]
+
+--public（多人版，部署時 AUTH_ENABLED=true 就會加）：只輸出公開行情。
+拿掉每個幣別的目標價、buffer、距離目標、狀態，也不輸出通知紀錄和「編輯 config.yaml」連結。
+多人版的目標價和通知紀錄只存在 Supabase，登入後才看得到自己的。
 
 只讀兩個地方：config.yaml（目標價等設定）和資料資料夾（state 分支的內容）。
 完全不讀環境變數，所以 Secrets 不可能出現在輸出裡；測試另外再檢查一次。
@@ -69,8 +74,39 @@ def _repo() -> str:
     return repo if repo.count("/") == 1 else DEFAULT_REPO
 
 
+# 多人版公開頁面不能出現的欄位（每個幣別）；前端 site/app.js 的 PERSONAL_FIELDS 也是這些
+PERSONAL_FIELDS = (
+    "target",
+    "buffer",
+    "rearm_above",
+    "distance_pct",
+    "status",
+    "status_since",
+)
+
+
+def public_problems(data: dict[str, Any]) -> list[str]:
+    """公開版 data.json 的檢查：回傳不該出現的東西（空的 = 沒問題）。"""
+    problems = [
+        f"{c.get('code')}.{k}"
+        for c in data.get("currencies", [])
+        for k in PERSONAL_FIELDS
+        if k in c
+    ]
+    if data.get("alerts"):
+        problems.append("alerts")
+    if "edit_config_url" in data:
+        problems.append("edit_config_url")
+    return problems
+
+
 def build_data(
-    cfg: AppConfig, data_dir: Path, *, now: datetime, repo: str | None = None
+    cfg: AppConfig,
+    data_dir: Path,
+    *,
+    now: datetime,
+    repo: str | None = None,
+    public: bool = False,
 ) -> dict[str, Any]:
     repo = repo or _repo()
     states = load_states(data_dir / "state.json")
@@ -113,7 +149,7 @@ def build_data(
         for a in read_alerts(data_dir)[:MAX_ALERTS]
     ]
 
-    return {
+    data = {
         "schema": SCHEMA_VERSION,
         "generated_at": _iso(now),
         "last_check": read_last_check(data_dir),
@@ -132,6 +168,13 @@ def build_data(
         "currencies": currencies,
         "alerts": alerts,
     }
+    if public:
+        for c in currencies:
+            for k in PERSONAL_FIELDS:
+                del c[k]
+        data["alerts"] = []
+        del data["edit_config_url"]
+    return data
 
 
 def write_data_json(data: dict[str, Any], out: Path) -> None:

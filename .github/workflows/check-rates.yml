@@ -1,5 +1,7 @@
-# 定時檢查匯率，到價就寄信；資料（狀態、走勢、通知紀錄、最後檢查）存在 state 分支，
-# 然後更新 GitHub Pages 上的頁面。
+# 定時檢查匯率，到價就寄信（多人版）：
+#   * 規則、狀態、通知紀錄在 Supabase（每個人自己的目標價，寄到自己的信箱）
+#   * 公開的匯率走勢、最後檢查時間存在 state 分支，然後更新 GitHub Pages 上的頁面
+# 退回單人版：Revert 切換的 PR（chore/cutover），見 docs/multi-user.md 的退回方案。
 name: check-rates
 
 on:
@@ -15,7 +17,7 @@ on:
         type: boolean
         default: true
       dry_run:
-        description: "不真的寄信，只印出來（--dry-run），也不 commit"
+        description: "不寄信、不寫入 Supabase，只印出來（--dry-run），也不 commit"
         type: boolean
         default: false
 
@@ -68,21 +70,34 @@ jobs:
           fi
           ls -la data
 
-      - name: Check rates
+      # 收件人來自 Supabase（每個人自己的 email），不再用 MAIL_TO。
+      # log 是公開的：程式只印規則編號和收件人數，錯誤訊息裡的 email 也會遮蔽。
+      - name: Check rates (multi-user)
         id: check
         env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          UNSUBSCRIBE_SECRET: ${{ secrets.UNSUBSCRIBE_SECRET }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          MAIL_TO: ${{ secrets.MAIL_TO }}
           FORCE: ${{ inputs.force && '--force' || '' }}
           DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
         run: |
-          # 就算有錯誤也先別讓 job 失敗：有些幣別可能已經寄出通知，資料一定要先存起來
+          # 就算有錯誤也先別讓 job 失敗：有些人可能已經寄出通知，走勢資料一定要先存起來
           set +e
-          python -m fx_alert check $FORCE $DRY_RUN
+          python -m fx_alert check --mode multi $FORCE $DRY_RUN
           code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
+
+      # state 分支是公開的：commit 前再確認一次沒有任何 email
+      - name: Check data for emails
+        run: |
+          if grep -rIlE '@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' data --exclude-dir=.git; then
+            echo "::error::state 分支的資料疑似包含 email，停止 commit"
+            exit 1
+          fi
+          echo "沒有發現 email"
 
       - name: Commit data to state branch
         if: ${{ !inputs.dry_run }}

@@ -601,6 +601,7 @@ async function main() {
   }
 
   // 登入功能開啟：先畫公開行情，登入後由 account.js 加上自己的目標價
+  $("privacy-note").hidden = false;
   const publicList = publicCurrencies(data.currencies);
   cardHint = "登入後可以設定目標價，到價時寄 Email 給你";
   renderCurrencies(publicList);

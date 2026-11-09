@@ -186,6 +186,12 @@ button.danger-button:disabled { opacity: .45; cursor: not-allowed; }
 /* ---------- 頁尾 ---------- */
 .page-footer { margin-top: 32px; color: var(--muted); font-size: .85rem; }
 
+/* ---------- 隱私說明 ---------- */
+.privacy { max-width: 720px; margin: 24px auto; line-height: 1.7; }
+.privacy h2 { font-size: 1.05rem; margin: 20px 0 6px; }
+.privacy h2:first-child { margin-top: 0; }
+.privacy ul { padding-left: 1.2em; margin: 6px 0; }
+
 /* ---------- 退訂確認頁 ---------- */
 .unsubscribe { max-width: 560px; margin: 24px auto; }
 .unsubscribe .primary {

@@ -68,18 +68,33 @@ jobs:
       - name: Assemble site
         run: |
           mkdir _site
-          cp -r site/index.html site/style.css site/app.js site/vendor site/data.json \
-            site/unsubscribe.html site/unsubscribe.js _site/
+          cp -r site/index.html site/style.css site/app.js site/account.js site/vendor \
+            site/data.json site/unsubscribe.html site/unsubscribe.js _site/
           find _site -type f | sort
 
-      # 最後一道防線：公開的檔案裡不能出現 email 或 SMTP 字樣
-      - name: Check for leaked secrets
+      # 登入功能開關（GitHub → Settings → Variables，不是 Secrets：這些值本來就公開）
+      #   AUTH_ENABLED 不是 true → config.js 只有 {"authEnabled": false}，不含任何 Supabase 設定
+      - name: Generate config.js
+        env:
+          AUTH_ENABLED: ${{ vars.AUTH_ENABLED }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
         run: |
-          if grep -rIlE '@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|SMTP_' _site --exclude-dir=vendor; then
-            echo "::error::上面這些檔案疑似包含 email 或 SMTP 設定，停止部署"
+          python -m fx_alert site-config --out _site/config.js
+          if [ "${AUTH_ENABLED,,}" != "true" ] && grep -qi supabase _site/config.js; then
+            echo "::error::登入功能關閉，但 config.js 含有 Supabase 設定"
             exit 1
           fi
-          echo "沒有發現 email 或 SMTP 字樣"
+
+      # 最後一道防線：公開的檔案裡不能出現 email、SMTP 字樣或 Supabase secret key
+      # （vendor 例外：supabase-js 本身含有 "sb_secret_" 字樣，用來警告不要在瀏覽器用 secret key）
+      - name: Check for leaked secrets
+        run: |
+          if grep -rIlE '@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|SMTP_|sb_secret_' _site --exclude-dir=vendor; then
+            echo "::error::上面這些檔案疑似包含 email、SMTP 設定或 secret key，停止部署"
+            exit 1
+          fi
+          echo "沒有發現 email、SMTP 字樣或 secret key"
 
       - uses: actions/configure-pages@v5
 

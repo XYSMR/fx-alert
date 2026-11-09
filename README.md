@@ -82,7 +82,8 @@ python -m pip install -e ".[dev]"
 
 python -m pytest                           # Python 測試
 python -m ruff check .                     # lint
-node --test site/tests/app.test.js site/tests/unsubscribe.test.js  # 前端測試（選用，需要 Node.js）
+node --test site/tests/app.test.js site/tests/account.test.js site/tests/unsubscribe.test.js  # 前端測試
+python -m fx_alert site-config            # 產生 site/config.js（預設登入功能關閉）
 # 資料庫 RLS 測試（tests/db）需要 Supabase CLI + Docker，沒有的話會自動略過、交給 CI 跑
 
 python -m fx_alert validate-config         # 驗證 config.yaml
@@ -123,6 +124,7 @@ src/fx_alert/
   main.py         CLI：check / validate-config / build-site
 site/
   index.html  style.css  app.js     儀表板（純 HTML/JS，無建置步驟）
+  account.js                        多人版：Google 登入、我的提醒（AUTH_ENABLED 開啟時才啟用）
   unsubscribe.html  unsubscribe.js  退訂確認頁
   vendor/chart.umd.min.js           Chart.js 4.6.1（MIT）
   samples/                          本機預覽用的範例資料（不部署；scripts/make_samples.py 產生）

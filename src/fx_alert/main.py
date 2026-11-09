@@ -265,6 +265,21 @@ def _cmd_unsubscribe_link(args) -> int:
     return 0
 
 
+def _cmd_site_config(args) -> int:
+    from fx_alert.site_config import SiteConfigError, write_site_config
+
+    try:
+        cfg = write_site_config(args.out)
+    except SiteConfigError as exc:
+        print(f"產生 config.js 失敗：{exc}", file=sys.stderr)
+        return 1
+    if cfg["authEnabled"]:
+        print(f"已產生 {args.out}：登入功能開啟（{cfg['supabaseUrl']}）")
+    else:
+        print(f"已產生 {args.out}：登入功能關閉（不含任何 Supabase 設定）")
+    return 0
+
+
 def _cmd_validate_config(args) -> int:
     try:
         cfg = load_config(args.config)
@@ -317,6 +332,12 @@ def main(argv: list[str] | None = None) -> int:
     unsub = sub.add_parser("unsubscribe-link", help="（本機測試用）印出某個使用者的退訂連結")
     unsub.add_argument("--user-id", required=True, help="Supabase 使用者的 UUID")
     unsub.set_defaults(func=_cmd_unsubscribe_link)
+
+    site_cfg = sub.add_parser(
+        "site-config", help="產生前端的 config.js（讀 AUTH_ENABLED 等環境變數）"
+    )
+    site_cfg.add_argument("--out", type=Path, default=Path("site/config.js"))
+    site_cfg.set_defaults(func=_cmd_site_config)
 
     validate = sub.add_parser("validate-config", help="只驗證 config.yaml 格式")
     validate.add_argument("--config", type=Path, default=Path("config.yaml"))

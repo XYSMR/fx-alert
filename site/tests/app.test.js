@@ -242,3 +242,57 @@ test("converterView：韓元、沒有匯率、沒輸入金額", () => {
   assert.equal(app.converterView(10000, null, "0.205", "日圓").error, "還沒有匯率資料，暫時無法試算");
   assert.equal(app.converterView(null, "0.2119", "0.205", "日圓").error, "請輸入台幣金額（例如 10000）");
 });
+
+// ---------- 登入開關（多人版） ----------
+
+const URL_ = "https://hvfgxplwjpnxizhlatjn.supabase.co";
+const KEY_ = "sb_publishable_AbCdEf0123456789";
+
+test("開關關閉（或沒有 config.js）時：不載入 supabase-js、不顯示登入、目標價照舊來自 data.json", () => {
+  const off = { auth: null, loadSupabase: false, showLogin: false, targetsFromDataJson: true };
+  assert.deepEqual(app.bootPlan(undefined), off); // config.js 不存在
+  assert.deepEqual(app.bootPlan({ authEnabled: false }), off);
+  // 就算有人在關閉的設定裡塞了網址和金鑰，也不會用
+  assert.deepEqual(app.bootPlan({ authEnabled: false, supabaseUrl: URL_, supabaseKey: KEY_ }), off);
+  assert.deepEqual(app.bootPlan({ authEnabled: "true", supabaseUrl: URL_, supabaseKey: KEY_ }), off);
+});
+
+test("開關開啟但設定不合法時也維持關閉（例如誤放 secret key）", () => {
+  for (const cfg of [
+    { authEnabled: true, supabaseUrl: URL_ },
+    { authEnabled: true, supabaseUrl: URL_, supabaseKey: "sb_secret_AbCdEf0123456789" },
+    { authEnabled: true, supabaseUrl: "https://evil.example.com", supabaseKey: KEY_ },
+  ]) {
+    assert.equal(app.bootPlan(cfg).loadSupabase, false, JSON.stringify(cfg));
+  }
+});
+
+test("開關開啟：載入 supabase-js、顯示登入，目標價改從 Supabase 讀", () => {
+  assert.deepEqual(app.bootPlan({ authEnabled: true, supabaseUrl: URL_, supabaseKey: KEY_ }), {
+    auth: { url: URL_, key: KEY_ },
+    loadSupabase: true,
+    showLogin: true,
+    targetsFromDataJson: false,
+  });
+});
+
+test("publicCurrencies：沒登入時拿掉所有個人設定，只留行情", () => {
+  const [c] = app.publicCurrencies([card({ history: [], high: null, low: null })]);
+  for (const k of ["target", "buffer", "rearm_above", "distance_pct", "status", "status_since"]) {
+    assert.equal(k in c, false, k);
+  }
+  assert.equal(c.rate, "0.2119");
+});
+
+test("沒有目標價：卡片只顯示行情，試算只有「現在換」，走勢摘要不提目標", () => {
+  const [c] = app.publicCurrencies([card({ history: [] })]);
+  const v = app.cardView(c);
+  assert.equal(v.badge, null);
+  assert.equal(v.message, null);
+  const conv = app.converterView(10000, "0.2119", undefined, "日圓");
+  assert.equal(conv.nowLine, "約 47,192 日圓");
+  assert.equal(conv.targetLine, null);
+  assert.doesNotMatch(app.chartSummary({ ...c, history: [["t", "0.2119"]] }), /目標/);
+  const r = app.yRange([0.21, 0.212], undefined);
+  assert.ok(r.min <= 0.21 && r.max >= 0.212);
+});

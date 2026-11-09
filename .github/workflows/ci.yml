@@ -28,11 +28,11 @@ jobs:
       # 會被公開的檔案（前端、範例資料、設定檔）不能出現 email 或 SMTP 設定
       - name: Check public files for secrets
         run: |
-          if grep -rIlE '@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|SMTP_' site config.yaml --exclude-dir=vendor; then
-            echo "::error::上面這些檔案疑似包含 email 或 SMTP 設定"
+          if grep -rIlE '@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|SMTP_|sb_secret_' site config.yaml --exclude-dir=vendor --exclude-dir=tests; then
+            echo "::error::上面這些檔案疑似包含 email、SMTP 設定或 secret key"
             exit 1
           fi
-          echo "沒有發現 email 或 SMTP 字樣"
+          echo "沒有發現 email、SMTP 字樣或 secret key"
 
   test:
     runs-on: ubuntu-latest

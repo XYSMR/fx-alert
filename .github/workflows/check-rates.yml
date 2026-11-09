@@ -1,4 +1,5 @@
-# 定時檢查匯率，到價就寄信；資料（狀態、走勢、通知紀錄、最後檢查）存在 state 分支。
+# 定時檢查匯率，到價就寄信；資料（狀態、走勢、通知紀錄、最後檢查）存在 state 分支，
+# 然後更新 GitHub Pages 上的頁面。
 name: check-rates
 
 on:
@@ -30,6 +31,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      config_ok: ${{ steps.validate.outputs.ok }}
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +47,10 @@ jobs:
 
       # 設定檔不合法就停在這裡：不抓、不寄、不 commit
       - name: Validate config.yaml
-        run: python -m fx_alert validate-config
+        id: validate
+        run: |
+          python -m fx_alert validate-config
+          echo "ok=true" >> "$GITHUB_OUTPUT"
 
       # 把 state 分支放到 data/（config.yaml 的 data_dir），程式直接在裡面讀寫
       - name: Check out state branch into data/
@@ -95,3 +101,14 @@ jobs:
         run: |
           echo "::error::fx_alert check 回報錯誤（結束碼 ${{ steps.check.outputs.exit_code }}），請看上面 Check rates 的輸出"
           exit 1
+
+  # 檢查完就更新頁面。就算這次抓匯率失敗也要部署，頁面才會顯示「有錯誤」；
+  # 但設定檔不合法、或是 dry-run 時不部署。
+  deploy:
+    needs: check
+    if: ${{ !cancelled() && needs.check.outputs.config_ok == 'true' && !inputs.dry_run }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/deploy-pages.yml

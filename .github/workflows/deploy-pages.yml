@@ -1,0 +1,91 @@
+# 產生 data.json 並部署到 GitHub Pages。
+# 觸發方式：
+#   1. check-rates 檢查完後直接呼叫（workflow_call）
+#   2. 改了前端、config.yaml 或程式，push 到 main
+#   3. 手動 Run workflow
+# 部署前一定先驗證 config.yaml，失敗就不部署。
+name: deploy-pages
+
+on:
+  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "config.yaml"
+      - "src/**"
+      - "pyproject.toml"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 不論從哪裡觸發，同一時間只部署一次；正在跑的會跑完，排隊中較舊的會被較新的取代
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main # 被 check-rates 呼叫時也一律用 main 上最新的前端與設定
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: python -m pip install .
+
+      - name: Validate config.yaml
+        run: python -m fx_alert validate-config
+
+      - name: Get data from state branch
+        run: |
+          if git ls-remote --exit-code --heads origin state >/dev/null; then
+            git fetch --depth=1 origin state:refs/remotes/origin/state
+            git worktree add data origin/state
+          else
+            echo "還沒有 state 分支：頁面會顯示「尚無資料」"
+            mkdir -p data
+          fi
+
+      - name: Build data.json
+        run: python -m fx_alert build-site --out site/data.json
+
+      # 只放頁面需要的檔案（不含 tests/、samples/）
+      - name: Assemble site
+        run: |
+          mkdir _site
+          cp -r site/index.html site/style.css site/app.js site/vendor site/data.json _site/
+          find _site -type f | sort
+
+      # 最後一道防線：公開的檔案裡不能出現 email 或 SMTP 字樣
+      - name: Check for leaked secrets
+        run: |
+          if grep -rIlE '@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|SMTP_' _site --exclude-dir=vendor; then
+            echo "::error::上面這些檔案疑似包含 email 或 SMTP 設定，停止部署"
+            exit 1
+          fi
+          echo "沒有發現 email 或 SMTP 字樣"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

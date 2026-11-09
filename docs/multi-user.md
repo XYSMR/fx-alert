@@ -151,7 +151,7 @@ python -m fx_alert migrate-me --email <你的 Gmail> --data-dir <state 分支的
 - [ ] A1 使用者用 PR 修改 `config.yaml` 的韓元目標價並合併（B 開始前必須完成）
 - [ ] A2 `feat/edge-new-keys`：兩支 function 改用新金鑰；staging 和正式專案都設好 `FX_SECRET_KEY`；
       先部署 staging 跑完整冒煙測試，再部署正式專案跑完整冒煙測試
-- [ ] A3 `feat/export-state`：反向匯出（退回方案用），見下方
+- [ ] A3 `feat/export-state`：反向匯出（退回方案用），用法見 D 第 2 步
 - [ ] A4 GitHub Secrets 換成正式專案：`SUPABASE_URL`、`SUPABASE_SECRET_KEY`、`UNSUBSCRIBE_SECRET`（和 Edge Function 同值）；
       Variables：`SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`；`AUTH_ENABLED` 先不設
 - [ ] A5 從 state 分支下載 `state.json`、`alerts.csv` 存在本機
@@ -178,8 +178,19 @@ python -m fx_alert migrate-me --email <你的 Gmail> --data-dir <state 分支的
 #### D. 退回方案（切回單人模式）
 
 1. Disable check-rates；刪除 Variable `AUTH_ENABLED` → 重新部署 Pages（登入按鈕消失）
-2. `export-state --dry-run` 確認 → 寫入 state 分支的 worktree → commit。
-   **不要用切換前的備份覆蓋**：多人版已經寄過的通知可能再寄一次。備份只在 `export-state` 失敗時用，並接受可能重複寄信
+2. 把資料庫裡自己的狀態寫回 state 分支（只在自己的電腦執行，secret key 只從環境變數讀）：
+
+   ```powershell
+   $env:SUPABASE_URL = "https://azpcfypitkdvkvhxwpbk.supabase.co"
+   $env:SUPABASE_SECRET_KEY = "sb_secret_..."
+   python -m fx_alert export-state --email <你的 Gmail> --data-dir ..\fx-state --dry-run
+   python -m fx_alert export-state --email <你的 Gmail> --data-dir ..\fx-state
+   cd ..\fx-state; git add state.json alerts.csv; git commit -m "退回單人版：寫回多人版期間的狀態"; git push
+   ```
+
+   - 只處理 `config.yaml` 裡的幣別；網頁上多設的幣別、網頁上改過的目標價只會提醒（以 `config.yaml` 為準）
+   - 資料庫沒轉換過狀態的幣別保留檔案原本的內容；通知依「時間到秒、幣別、匯率、目標價」去重，執行幾次結果都一樣
+   - **不要用切換前的備份覆蓋**：多人版已經寄過的通知可能再寄一次。備份只在 `export-state` 失敗時用，並接受可能重複寄信
 3. Revert `chore/cutover` PR；`MAIL_TO` 已經刪了就加回
 4. Enable check-rates → 手動 Run 一次（建議先 dry_run）。正式專案的資料不刪，下次切換用 `--replace`
 

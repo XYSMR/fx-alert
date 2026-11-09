@@ -1,0 +1,17 @@
+{
+  "_說明": "刪除帳號的確認文字比對案例。前端（site/tests/account.test.js）和 Edge Function（handler.test.ts）都讀這個檔案，保證兩邊規則一致：先 NFC 正規化、去掉前後空白（含全形空白），再和「刪除我的帳號」完全比對。",
+  "text": "刪除我的帳號",
+  "cases": [
+    { "input": "刪除我的帳號", "ok": true },
+    { "input": "  刪除我的帳號  ", "ok": true },
+    { "input": "\t刪除我的帳號\n", "ok": true },
+    { "input": "　刪除我的帳號　", "ok": true },
+    { "input": "刪除我的帳號。", "ok": false },
+    { "input": "刪除 我的帳號", "ok": false },
+    { "input": "删除我的帐号", "ok": false },
+    { "input": "刪除我的帳戶", "ok": false },
+    { "input": "刪除", "ok": false },
+    { "input": "", "ok": false },
+    { "input": "   ", "ok": false }
+  ]
+}

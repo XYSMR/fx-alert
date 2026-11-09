@@ -116,3 +116,36 @@ test("錯誤訊息不顯示技術細節", () => {
   assert.equal(a.errorMessage({ code: "XX000", message: "internal" }), "儲存失敗，請稍後再試");
   assert.equal(a.errorMessage(null), "儲存失敗，請稍後再試");
 });
+
+// ---------- 刪除帳號 ----------
+
+// 和 Edge Function 的測試讀同一份案例，保證前後端比對規則一致
+const CASES = require("../../supabase/functions/delete-account/confirm_cases.json");
+
+test("確認文字：和 Edge Function 共用同一份案例", () => {
+  assert.equal(a.CONFIRM_TEXT, CASES.text);
+  assert.ok(CASES.cases.length >= 10);
+  for (const c of CASES.cases) {
+    assert.equal(a.isConfirmed(c.input), c.ok, JSON.stringify(c.input));
+  }
+  assert.equal(a.normalizeConfirm(42), "");
+  assert.equal(a.isConfirmed(undefined), false);
+});
+
+test("刪除失敗的提示：登入太久要重新登入", () => {
+  assert.equal(a.deleteErrorMessage("reauth_required"), "為了安全，請重新登入後再刪除");
+  assert.equal(a.deleteErrorMessage("confirm_mismatch"), "請輸入「刪除我的帳號」");
+  assert.equal(a.deleteErrorMessage("not_logged_in"), "登入已失效，請重新登入");
+  assert.equal(a.deleteErrorMessage(null), "刪除失敗，請稍後再試");
+});
+
+// ---------- 另一台裝置刪除了帳號 ----------
+
+test("isAccountGone：讀不到自己的 profile、或寫入時外鍵錯誤，代表帳號已不存在", () => {
+  assert.equal(a.isAccountGone({ data: null, error: null }), true); // RLS 下只看得到自己 → 空的
+  assert.equal(a.isAccountGone({ data: { email_enabled: true }, error: null }), false);
+  assert.equal(a.isAccountGone({ data: null, error: { code: "23503" } }), true); // 新增規則時
+  assert.equal(a.isAccountGone({ data: null, error: { code: "08006" } }), false); // 網路問題不算
+  assert.equal(a.isAccountGone(null), false);
+  assert.equal(a.errorMessage({ code: "23503" }), "帳號已不存在，請重新登入");
+});

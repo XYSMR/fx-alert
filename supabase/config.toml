@@ -425,3 +425,8 @@ enabled = true
 # fx-alert：一鍵退訂。Gmail 和沒登入的人也要能呼叫，所以不檢查 JWT；身分由 HMAC 簽章驗證。
 [functions.unsubscribe]
 verify_jwt = false
+
+# fx-alert：刪除自己的帳號。平台層的 JWT 驗證只認舊版密鑰，所以關掉，
+# 改在 handler.ts 裡用 Supabase Auth 驗證 token，並要求最近 10 分鐘內登入過。
+[functions.delete-account]
+verify_jwt = false

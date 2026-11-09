@@ -1,10 +1,16 @@
-# 手動執行：用 staging 的 Supabase 跑一次多人版檢查（只讀）。
-#   --mode multi --dry-run：讀規則、抓匯率、判斷，但不寄信、不寫入任何狀態、也不 commit。
-# 用來確認 SupabaseStore 對真正的 Supabase REST API 能正常運作。
+# 手動執行：用 staging 的 Supabase 跑一次多人版檢查。
+#   預設（send 不勾）：--dry-run，讀規則、抓匯率、判斷，但不寄信、不寫入任何狀態。
+#   勾選 send：真的用 Gmail 寄給 staging 裡到價的使用者，並把狀態、通知紀錄寫回 staging。
+# 兩種都不會 commit，也不會動到正式的單人版排程（check-rates）。
 name: staging-check
 
 on:
   workflow_dispatch:
+    inputs:
+      send:
+        description: "真的寄信並寫入 staging（不勾 = 只讀）"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,12 +46,23 @@ jobs:
           fi
 
       - name: Multi-user check (dry-run, read-only)
+        if: ${{ !inputs.send }}
         env:
           SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
           # 有設定才會產生退訂連結（只放進信件，不會印在 log）
           UNSUBSCRIBE_SECRET: ${{ secrets.STAGING_UNSUBSCRIBE_SECRET }}
         run: python -m fx_alert check --mode multi --dry-run --force
+
+      - name: Multi-user check (send, writes to staging)
+        if: ${{ inputs.send }}
+        env:
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+          UNSUBSCRIBE_SECRET: ${{ secrets.STAGING_UNSUBSCRIBE_SECRET }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: python -m fx_alert check --mode multi --force
 
       # log 是公開的：再確認一次沒有任何 email 出現在這次產生的資料裡
       - name: Check output files for emails

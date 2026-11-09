@@ -131,11 +131,12 @@ site/
   tests/app.test.js                 前端單元測試（不部署）
 .github/workflows/
   ci.yml  check-rates.yml  deploy-pages.yml
-  staging-check.yml                 手動：用 staging Supabase 跑多人版 dry-run（只讀）
+  staging-check.yml                 手動：用 staging Supabase 跑多人版（預設只讀；勾 send 會真的寄信）
 supabase/
   config.toml                       本機 Supabase 設定（CI 用）
   migrations/                       多人版資料表、權限、RLS
   functions/unsubscribe/            一鍵退訂 Edge Function（Deno）
+  functions/delete-account/         刪除帳號 Edge Function（Deno）
 tests/db/                           RLS 測試（需要 SUPABASE_DB_URL）
 docs/multi-user.md                  多人版設計與開發步驟
 ```

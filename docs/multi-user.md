@@ -59,7 +59,7 @@
 | 3 | `feat/multi-user-check` | `--mode single/multi`；規則從 view `active_rules` 讀（排除 Email 關閉的人與停用的規則）；每日寄信上限 `email.daily_limit`；多人版 `--dry-run` 只讀；錯誤訊息遮蔽 email；手動的 `staging-check` workflow |
 | 4 | `feat/unsubscribe` | HMAC 簽章、Edge Function（Deno 測試）、確認頁、退訂 header；測試舊信連結仍有效、竄改的簽章被拒 |
 | 5 | `feat/frontend-auth` | Google 登入、我的提醒、我的通知紀錄、Email 開關；`AUTH_ENABLED` 開關（見下方） |
-| 6 | `feat/delete-account` | 刪除帳號 Edge Function（驗證使用者 JWT → 用 secret key 刪除）＋前端按鈕 |
+| 6 | `feat/delete-account` | 刪除帳號 Edge Function（Auth 驗證 token、最近 10 分鐘內登入、確認文字）＋前端；排程與刪除同時發生時只略過該使用者；已刪除帳號點舊退訂連結顯示「已經不會再收到通知」；staging-check 的 `send` 選項 |
 | 7 | `feat/migrate-me` | 把 `config.yaml` 目標價、`state.json` 狀態、`alerts.csv` 搬到你的帳號 |
 | 8 | `chore/cutover` | 排程改 `--mode multi`、`data.json` 拿掉目標價與通知紀錄、刪 `MAIL_TO`、保活、隱私說明 |
 
@@ -87,3 +87,20 @@
   比「目標 + 門檻」大的最小報價，和排程的「匯率 > 目標 + 門檻」一致）。
 - 目標價和現價差超過 30% 時，存檔前再確認一次（防止打錯小數點）。
 - 新增提醒的幣別選單只列出還沒設定過的幣別。
+
+### 第 6 步：刪除帳號（`supabase/functions/delete-account`）
+
+- 只接受 POST；必須帶使用者自己的登入 token，由 Supabase Auth 驗證是誰；**只刪除 token 本人**，不接受請求裡的 user_id。
+- **最近 10 分鐘內登入過**才可以刪（看 token 的 `amr` 登入時間）；否則回 `reauth_required`，
+  前端提示「為了安全，請重新登入後再刪除」並顯示「重新登入」。
+- 確認文字「刪除我的帳號」：前後端用同一套規則（NFC 正規化、去掉前後空白），
+  測試案例放在 `confirm_cases.json`，前端和 Edge Function 的測試都讀這個檔案。
+- 刪除 `auth.users` 後，`profiles`、`alert_rules`、`notifications` 由資料庫連帶刪除。
+
+和刪除有關的邊界情況：
+
+| 情況 | 行為 |
+|---|---|
+| 排程讀出規則後、寫入前，使用者刪除帳號 | `record_alert` 回傳 null（外鍵錯誤也會被接住並回復），排程只記一行 log、略過這個人；其他人照常，整次排程不算失敗。信可能已經寄出 |
+| 已刪除帳號的人點舊信的退訂連結 | Edge Function 回 200 `no_account`，確認頁顯示「你已經不會再收到通知」 |
+| 另一台裝置還登入著 | 讀不到自己的 profile、或寫入時外鍵錯誤 → 顯示「帳號已不存在，請重新登入」並自動登出 |

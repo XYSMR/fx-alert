@@ -259,7 +259,7 @@ def _watch(state=ARMED, key="7"):
 
 def test_record_alert_calls_rpc():
     store, session = sb(FakeResponse(body=123))
-    store.record_alert(_watch(), D("0.2040"), NOW)
+    assert store.record_alert(_watch(), D("0.2040"), NOW) is True
     (call,) = session.calls
     assert call["method"] == "POST"
     assert call["url"] == f"{URL}/rest/v1/rpc/record_alert"
@@ -270,6 +270,13 @@ def test_record_alert_calls_rpc():
         "p_sent_at": "2026-11-09T10:07:00+08:00",
     }
     assert store.flush() is True
+
+
+def test_record_alert_returns_false_when_rule_was_deleted():
+    """資料庫的 record_alert 回傳 null：規則或帳號在檢查期間被刪除。"""
+    store, _ = sb(FakeResponse(body=None))
+    assert store.record_alert(_watch(), D("0.2040"), NOW) is False
+    assert store.flush() is False
 
 
 def test_record_alert_failure_raises():
@@ -360,8 +367,9 @@ def mega_json(jpy="0.2040", krw="0.0260"):
 class MemoryStore:
     """記錄呼叫的假 store。"""
 
-    def __init__(self, watches, fail_alert_for=(), fail_load=False, sent_today=0):
+    def __init__(self, watches, fail_alert_for=(), fail_load=False, sent_today=0, deleted=()):
         self.watches = watches
+        self.deleted = deleted  # 檢查期間被刪除的規則（帳號已刪除）
         self.sent_today = sent_today
         self.count_since = None
         self.fail_alert_for = fail_alert_for
@@ -376,9 +384,14 @@ class MemoryStore:
     def record_alert(self, w, rate, now):
         if w.key in self.fail_alert_for:
             raise StoreError("Supabase 回應 500：boom")
+        if w.key in self.deleted:
+            return False
         self.alerts.append((w.key, rate))
+        return True
 
     def record_transition(self, w, new_state, rate, now):
+        if w.key in self.deleted:
+            return False
         self.transitions.append((w.key, new_state))
         return True
 
@@ -527,3 +540,62 @@ def test_send_error_with_address_is_redacted(tmp_path):
     assert r.errors == [
         "JPY 規則#1 通知失敗，狀態不更新：寄信失敗：SMTPRecipientsRefused: {'***': (550, b'no')}"
     ]
+
+
+# ---- 檢查期間有人刪除帳號 ----
+
+
+def test_deleted_user_during_check_is_skipped_without_failing(tmp_path):
+    """規則讀出來之後、寫入之前，alice 刪除了帳號：只略過她，bob 照常，整次排程成功。"""
+    store = MemoryStore(
+        [
+            user_watch("1", "alice@example.com"),  # 到價 → 寄信後記錄時發現已刪除
+            user_watch("2", "bob@example.com"),  # 到價 → 正常記錄
+            user_watch("3", "alice@example.com", target="0.200", state=AlertState.TRIGGERED),
+        ],
+        deleted=("1", "3"),
+    )
+    logs = []
+    r = run(tmp_path, store, logs=logs)
+    assert r.exit_code == 0 and r.errors == []
+    assert [k for k, _ in store.alerts] == ["2"]
+    assert any("JPY 規則#1: 規則已不存在" in line for line in logs)
+    assert any("JPY 規則#3: 規則在檢查期間被變更或刪除" in line for line in logs)
+    assert all("@" not in line for line in logs)
+
+
+def test_supabase_store_deleted_rule_end_to_end(tmp_path):
+    """SupabaseStore 對真正的回應格式：讀到 2 條規則，其中 1 條在寫入時已被刪除。"""
+    rows = [
+        {**ROWS[0], "id": 1, "state": "armed", "target": "0.300000", "state_target": None},
+        {
+            **ROWS[0],
+            "id": 2,
+            "state": "armed",
+            "target": "0.300000",
+            "state_target": None,
+            "email": "bob@example.com",
+        },
+    ]
+    session = FakeSession(
+        FakeResponse(body=rows),  # load_watches
+        FakeResponse(200, [], headers={"Content-Range": "*/0"}),  # count_sent_since
+        FakeResponse(body=None),  # record_alert #1 → null（帳號已刪除）
+        FakeResponse(body=42),  # record_alert #2
+    )
+    store = SupabaseStore(SupabaseConfig(URL, KEY), session=session)
+    n = DryRunNotifier(out=io.StringIO())
+    logs = []
+    r = main_mod.run_check(
+        make_cfg(tmp_path),
+        n,
+        EMAIL,
+        now=NOW,
+        fetch=lambda: mega_json(),
+        log=logs.append,
+        store=store,
+    )
+    assert r.exit_code == 0 and r.errors == []
+    assert r.notified == ["JPY 規則#1", "JPY 規則#2"]
+    assert any("規則#1: 規則已不存在" in line for line in logs)
+    assert r.state_changed is True

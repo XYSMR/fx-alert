@@ -34,6 +34,13 @@ test("parseLink rejects incomplete or tampered links", () => {
   }
 });
 
+test("帳號已刪除的人點舊信的連結：顯示「你已經不會再收到通知」", () => {
+  const v = resultView(200, "no_account");
+  assert.equal(v.tone, "ok");
+  assert.equal(v.title, "你已經不會再收到通知");
+  assert.equal(resultView(200, "unsubscribed").title, "已取消 Email 到價通知");
+});
+
 test("resultView", () => {
   assert.equal(resultView(200).tone, "ok");
   assert.match(resultView(200).text, /我的提醒/);

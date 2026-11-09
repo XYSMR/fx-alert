@@ -10,6 +10,7 @@ const SCALE = 1000000n; // 小數 6 位
 const DEFAULT_BUFFER_PERMILLE = 5n; // 沒填回升門檻時：目標價的 0.5%
 const FAR_FROM_RATE = 0.3; // 目標價和現價差超過 30% 就再確認一次
 const MAX_TARGET = 1000n * SCALE;
+const CONFIRM_TEXT = "刪除我的帳號";
 
 // ====================================================================
 // 純函式
@@ -141,10 +142,38 @@ function ruleStatusText(rule, profile) {
 /** Supabase / PostgREST 的錯誤 → 給使用者看的話（不顯示技術細節） */
 function errorMessage(err) {
   const code = err && err.code;
+  if (code === "23503") return "帳號已不存在，請重新登入";
   if (code === "23505") return "這個幣別已經有提醒了";
   if (code === "23514") return "數值不符合規則（目標價要大於 0，回升門檻最多是目標價的 10%）";
   if (code === "42501" || code === "PGRST301") return "沒有權限，請重新登入";
   return "儲存失敗，請稍後再試";
+}
+
+/** 確認文字的比對規則（和 supabase/functions/delete-account/handler.ts 一樣）：NFC、去掉前後空白 */
+function normalizeConfirm(text) {
+  return typeof text === "string" ? text.normalize("NFC").trim() : "";
+}
+
+function isConfirmed(text) {
+  return normalizeConfirm(text) === CONFIRM_TEXT;
+}
+
+/**
+ * 帳號是不是已經不存在（例如在另一台裝置刪除了帳號）：
+ *   讀 profile 成功但沒有資料（RLS 下只看得到自己的那一列），或寫入時外鍵錯誤（23503）。
+ */
+function isAccountGone(result) {
+  if (!result) return false;
+  if (result.error) return result.error.code === "23503";
+  return result.data === null || result.data === undefined;
+}
+
+/** 刪除帳號 Edge Function 的錯誤 → 給使用者看的話 */
+function deleteErrorMessage(error) {
+  if (error === "reauth_required") return "為了安全，請重新登入後再刪除";
+  if (error === "confirm_mismatch") return `請輸入「${CONFIRM_TEXT}」`;
+  if (error === "not_logged_in") return "登入已失效，請重新登入";
+  return "刪除失敗，請稍後再試";
 }
 
 // ====================================================================
@@ -153,6 +182,7 @@ function errorMessage(err) {
 
 const NAMES = {};
 let client = null;
+let config = null;
 let state = { session: null, profile: null, rules: [], notifications: [] };
 let publicList = [];
 let notify = () => {};
@@ -175,6 +205,30 @@ function say(text, tone = "ok") {
   const box = byId("my-rules-status");
   box.className = `form-status ${tone}`;
   box.textContent = text;
+}
+
+function notice(text) {
+  const box = byId("account-notice");
+  box.textContent = text;
+  box.hidden = !text;
+}
+
+let loggingOut = false;
+
+/** 帳號已不存在（另一台裝置刪除了帳號）：提示並登出 */
+async function accountGone() {
+  notice("帳號已不存在，請重新登入");
+  loggingOut = true;
+  await client.auth.signOut({ scope: "local" });
+  loggingOut = false;
+  state.session = null;
+  await refresh();
+}
+
+/** 寫入失敗的共同處理 */
+async function writeFailed(error) {
+  if (isAccountGone({ error })) return accountGone();
+  say(errorMessage(error), "error");
 }
 
 function loadScript(src) {
@@ -210,12 +264,15 @@ function renderAccount() {
 
 async function login() {
   const redirectTo = location.origin + location.pathname;
+  notice("");
   const { error } = await client.auth.signInWithOAuth({ provider: "google", options: { redirectTo } });
   if (error) alert("無法開始登入，請稍後再試");
 }
 
 async function logout() {
+  loggingOut = true;
   await client.auth.signOut();
+  loggingOut = false;
 }
 
 // ---------- 讀資料 ----------
@@ -232,9 +289,11 @@ async function loadMine() {
       .limit(20),
   ]);
   if (p.error || r.error || n.error) throw p.error || r.error || n.error;
-  state.profile = p.data ?? { email_enabled: true };
+  if (isAccountGone(p)) return false;
+  state.profile = p.data;
   state.rules = r.data ?? [];
   state.notifications = n.data ?? [];
+  return true;
 }
 
 async function refresh() {
@@ -246,8 +305,9 @@ async function refresh() {
     notify(publicList, false);
     return;
   }
+  let exists;
   try {
-    await loadMine();
+    exists = await loadMine();
   } catch {
     renderAccount();
     byId("my-rules").hidden = false;
@@ -255,6 +315,7 @@ async function refresh() {
     say("讀不到你的提醒設定，請重新整理頁面", "error");
     return;
   }
+  if (!exists) return accountGone();
   renderAccount();
   renderRules();
   renderNotifications();
@@ -276,10 +337,9 @@ function renderEmailSwitch() {
     const { error } = await client.from("profiles")
       .update({ email_enabled: next }).eq("user_id", state.session.user.id);
     if (error) {
-      say(errorMessage(error), "error");
       input.checked = !next;
       input.disabled = false;
-      return;
+      return writeFailed(error);
     }
     say(next
       ? "已開啟 Email 通知。所有提醒會從「等待中」重新開始，不會補寄關閉期間的通知。"
@@ -328,14 +388,14 @@ function ruleRow(rule) {
     if (far && !confirm(far)) return;
     const { error } = await client.from("alert_rules")
       .update({ target: t.value, buffer: b.value, enabled: enabled.checked }).eq("id", rule.id);
-    if (error) return say(errorMessage(error), "error");
+    if (error) return writeFailed(error);
     say(`已儲存${name}的提醒`);
     await refresh();
   };
   const remove = async () => {
     if (!confirm(`確定要刪除${name}的提醒嗎？通知紀錄會保留。`)) return;
     const { error } = await client.from("alert_rules").delete().eq("id", rule.id);
-    if (error) return say(errorMessage(error), "error");
+    if (error) return writeFailed(error);
     say(`已刪除${name}的提醒`);
     await refresh();
   };
@@ -371,7 +431,7 @@ function addForm() {
     const far = farFromRateMessage(t.value, rateOf(select.value));
     if (far && !confirm(far)) return;
     const { error } = await client.from("alert_rules").insert({ currency: select.value, target: t.value });
-    if (error) return say(errorMessage(error), "error");
+    if (error) return writeFailed(error);
     say(`已新增${NAMES[select.value] ?? select.value}的提醒`);
     await refresh();
   };
@@ -382,12 +442,71 @@ function addForm() {
     h("button", { type: "submit", class: "primary" }, "新增"));
 }
 
+function deleteSection() {
+  const input = h("input", {
+    type: "text", autocomplete: "off", "aria-label": "確認文字", placeholder: CONFIRM_TEXT,
+  });
+  const go = h("button", { type: "submit", class: "danger-button", disabled: true }, "永久刪除");
+  const msg = h("p", { class: "form-status error", role: "status", "aria-live": "polite" });
+  const relogin = h("button", { type: "button", class: "link", hidden: true, onclick: login },
+    "重新登入");
+  input.addEventListener("input", () => {
+    go.disabled = !isConfirmed(input.value);
+  });
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!isConfirmed(input.value)) return;
+    go.disabled = true;
+    msg.textContent = "刪除中…";
+    relogin.hidden = true;
+    let status = 0;
+    let error = null;
+    try {
+      const res = await fetch(`${config.url}/functions/v1/delete-account`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: config.key,
+          Authorization: `Bearer ${state.session.access_token}`,
+        },
+        body: JSON.stringify({ confirm: input.value }),
+      });
+      status = res.status;
+      error = (await res.json().catch(() => ({}))).error ?? null;
+    } catch {
+      status = 0;
+    }
+    if (status === 200) {
+      loggingOut = true;
+      await client.auth.signOut({ scope: "local" });
+      loggingOut = false;
+      state.session = null;
+      notice("帳號已刪除。你的提醒、通知紀錄和 Email 設定都已經刪除。");
+      await refresh();
+      return;
+    }
+    msg.textContent = deleteErrorMessage(error);
+    relogin.hidden = error !== "reauth_required" && error !== "not_logged_in";
+    go.disabled = !isConfirmed(input.value);
+  };
+  return h("details", { class: "danger-zone" },
+    h("summary", {}, "刪除我的帳號"),
+    h("form", { onsubmit: submit },
+      h("p", {}, "會永久刪除：你的提醒、通知紀錄、Email 設定。已經寄出的信不會收回。刪除後無法復原。"),
+      h("p", { class: "hint" }, "想再使用，用 Google 登入就會建立新帳號。為了安全，需要最近 10 分鐘內登入過。"),
+      h("label", { class: "field" }, h("span", {}, `請輸入「${CONFIRM_TEXT}」確認`), input),
+      h("div", { class: "rule-actions" }, go, relogin),
+      msg));
+}
+
 function renderRules() {
   byId("my-rules").hidden = false;
   byId("my-rules-body").replaceChildren(
     renderEmailSwitch(),
     ...state.rules.map(ruleRow),
     addForm(),
+    h("h3", { class: "section-title" }, "帳號"),
+    deleteSection(),
   );
 }
 
@@ -416,14 +535,19 @@ async function start(auth, currencies, onChange) {
   } catch {
     return; // 載不到就維持公開頁面
   }
+  config = auth;
   client = window.supabase.createClient(auth.url, auth.key, {
     auth: { flowType: "pkce", persistSession: true, detectSessionInUrl: true },
   });
   const { data } = await client.auth.getSession();
   state.session = data.session;
   await refresh();
-  client.auth.onAuthStateChange((_event, session) => {
+  client.auth.onAuthStateChange((event, session) => {
     const changed = (session && session.user.id) !== (state.session && state.session.user.id);
+    // 不是自己按登出，卻被登出（例如帳號在另一台裝置刪除、登入過期）
+    if (event === "SIGNED_OUT" && state.session && !loggingOut) {
+      notice("登入已失效，請重新登入");
+    }
     state.session = session;
     if (changed) setTimeout(refresh, 0); // 不在 callback 裡呼叫 Supabase（官方建議）
   });
@@ -433,7 +557,8 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     parseDec, formatDec, decimalsOf, autoBuffer, effectiveBuffer, rearmQuote, rearmText,
     validateTarget, validateBuffer, farFromRateMessage, availableCurrencies, distancePct,
-    personalCurrencies, ruleStatusText, errorMessage,
+    personalCurrencies, ruleStatusText, errorMessage, normalizeConfirm, isConfirmed,
+    isAccountGone, deleteErrorMessage, CONFIRM_TEXT,
   };
 } else {
   window.FxAccount = { start };

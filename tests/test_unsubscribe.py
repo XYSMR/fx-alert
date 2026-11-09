@@ -149,7 +149,7 @@ class OneWatchStore:
         return 0
 
     def record_alert(self, w, rate, now):
-        pass
+        return True
 
     def record_transition(self, w, s, rate, now):
         return True

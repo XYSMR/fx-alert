@@ -16,8 +16,15 @@ function parseLink(search) {
   return { u, s, endpoint: `https://${p}.supabase.co/functions/v1/unsubscribe` };
 }
 
-/** 依結果決定要顯示的文字 */
-function resultView(status) {
+/** 依結果決定要顯示的文字。detail 是 Edge Function 回傳的 status（"no_account" = 帳號已刪除） */
+function resultView(status, detail = null) {
+  if (status === 200 && detail === "no_account") {
+    return {
+      tone: "ok",
+      title: "你已經不會再收到通知",
+      text: "這個帳號已經刪除，我們不會再寄任何到價通知給你。",
+    };
+  }
   if (status === 200) {
     return {
       tone: "ok",
@@ -65,6 +72,7 @@ function main() {
     button.disabled = true;
     button.textContent = "處理中…";
     let status = 0;
+    let detail = null;
     try {
       const res = await fetch(link.endpoint, {
         method: "POST",
@@ -73,13 +81,18 @@ function main() {
         referrerPolicy: "no-referrer",
       });
       status = res.status;
+      try {
+        detail = (await res.json()).status ?? null;
+      } catch {
+        detail = null;
+      }
     } catch {
       status = 0;
     }
     if (status === 200) form.hidden = true;
     button.disabled = false;
     button.textContent = "取消 Email 到價通知";
-    show(resultView(status));
+    show(resultView(status, detail));
   });
 }
 

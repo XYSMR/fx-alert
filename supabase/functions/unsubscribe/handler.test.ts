@@ -19,15 +19,15 @@ const SIG = "AjoUefqQcmpwV0VAbKi-BoBMszBZ6bicHXfBpHuWxDQ";
 const FN = "https://abcdefghijklmnopqrst.supabase.co/functions/v1/unsubscribe";
 const SITE = "https://xysmr.github.io";
 
-function setup(fail = false) {
+function setup(fail = false, accountExists = true) {
   const disabled: string[] = [];
   const deps = {
     secret: SECRET,
     allowedOrigins: [SITE],
-    disable: (u: string): Promise<void> => {
+    disable: (u: string): Promise<boolean> => {
       if (fail) return Promise.reject(new Error("db down"));
       disabled.push(u);
-      return Promise.resolve();
+      return Promise.resolve(accountExists);
     },
   };
   return { deps, disabled };
@@ -73,8 +73,17 @@ Deno.test("one-click POST from a mailbox disables that user", async () => {
   const { deps, disabled } = setup();
   const res = await handle(oneClick(), deps);
   assertEquals(res.status, 200);
-  assertEquals(await res.json(), { ok: true });
+  assertEquals(await res.json(), { ok: true, status: "unsubscribed" });
   assertEquals(disabled, [USER]);
+});
+
+Deno.test("deleted account clicking an old link: 200 'no_account', never 500", async () => {
+  const { deps } = setup(false, false);
+  for (const req of [oneClick(), fromPage({ u: USER, s: SIG })]) {
+    const res = await handle(req, deps);
+    assertEquals(res.status, 200);
+    assertEquals(await res.json(), { ok: true, status: "no_account" });
+  }
 });
 
 Deno.test("old link still works: the same link can be used again and again", async () => {

@@ -158,6 +158,15 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .form-status.ok { color: var(--green); }
 .form-status.error { color: var(--red); }
 
+.section-title { margin: 22px 0 6px; font-size: 1rem; }
+.danger-zone summary { color: var(--red); }
+.danger-zone form { margin-top: 10px; padding: 14px 16px; border: 1px solid var(--red); border-radius: 10px; background: var(--red-bg); display: grid; gap: 10px; }
+.danger-zone p { margin: 0; }
+.danger-zone .field input { width: 16ch; }
+button.danger-button { font: inherit; font-weight: 700; padding: 8px 16px; border-radius: 10px; border: 1px solid var(--red); background: var(--red); color: #fff; cursor: pointer; }
+button.danger-button:disabled { opacity: .45; cursor: not-allowed; }
+.account-notice { margin: 0 0 12px; padding: 10px 14px; border-radius: 10px; background: var(--amber-bg); color: var(--amber); font-weight: 600; }
+
 /* ---------- 手機 ---------- */
 @media (max-width: 640px) {
   body { padding: 16px 12px 32px; }

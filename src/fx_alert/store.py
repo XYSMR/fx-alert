@@ -1,7 +1,8 @@
 """規則與狀態的存放處：run_check 只透過這裡讀寫，不知道資料在檔案還是資料庫。
 
     load_watches()                 讀出這次要檢查的所有規則（含上一次的狀態、收件人）
-    record_alert(w, rate, now)     寄信成功後：狀態改成「已通知」＋寫一筆通知紀錄
+    record_alert(w, rate, now)     寄信成功後：狀態改成「已通知」＋寫一筆通知紀錄；
+                                   回傳 False 表示規則已不存在（例如使用者剛好刪除帳號）
     record_transition(w, s, ...)   沒寄信但狀態可能改變（例如回升後重新等待）
     flush()                        把累積的變更寫出去；回傳「狀態是否有變」
     count_sent_since(t)            t 之後寄出了幾封通知（每日寄信上限用）
@@ -63,7 +64,7 @@ class Watch:
 class RuleStore(Protocol):
     def load_watches(self) -> list[Watch]: ...
 
-    def record_alert(self, watch: Watch, rate: Decimal, now: datetime) -> None: ...
+    def record_alert(self, watch: Watch, rate: Decimal, now: datetime) -> bool: ...
 
     def record_transition(
         self, watch: Watch, new_state: AlertState, rate: Decimal, now: datetime
@@ -105,9 +106,10 @@ class FileStore:
             for r in self._cfg.rules
         ]
 
-    def record_alert(self, watch: Watch, rate: Decimal, now: datetime) -> None:
+    def record_alert(self, watch: Watch, rate: Decimal, now: datetime) -> bool:
         append_alert(self._cfg.data_dir, now, watch.rule.currency, rate, watch.rule.target)
         self._transition(watch, AlertState.TRIGGERED, rate, now)
+        return True
 
     def record_transition(
         self, watch: Watch, new_state: AlertState, rate: Decimal, now: datetime
@@ -224,9 +226,10 @@ class SupabaseStore:
             raise StoreError("Supabase 沒有回傳通知數量")
         return int(total)
 
-    def record_alert(self, watch: Watch, rate: Decimal, now: datetime) -> None:
-        # 改狀態＋寫通知紀錄在資料庫的同一個交易裡完成（public.record_alert）
-        self._request(
+    def record_alert(self, watch: Watch, rate: Decimal, now: datetime) -> bool:
+        # 改狀態＋寫通知紀錄在資料庫的同一個交易裡完成（public.record_alert）。
+        # 回傳 null = 規則或帳號在這段期間被刪除，什麼都沒寫
+        resp = self._request(
             "POST",
             "rpc/record_alert",
             json={
@@ -236,7 +239,12 @@ class SupabaseStore:
                 "p_sent_at": now.isoformat(timespec="seconds"),
             },
         )
-        self._changed = True
+        try:
+            recorded = resp.json() is not None
+        except ValueError:
+            recorded = True  # 沒有內容但成功：保守當成已寫入，避免重複寄信
+        self._changed = self._changed or recorded
+        return recorded
 
     def record_transition(
         self, watch: Watch, new_state: AlertState, rate: Decimal, now: datetime
@@ -278,8 +286,9 @@ class ReadOnlyStore:
     def count_sent_since(self, since: datetime) -> int:
         return self._inner.count_sent_since(since)
 
-    def record_alert(self, watch: Watch, rate: Decimal, now: datetime) -> None:
+    def record_alert(self, watch: Watch, rate: Decimal, now: datetime) -> bool:
         self._log(f"[dry-run] {watch.label}: 不寫入「已通知」")
+        return True
 
     def record_transition(
         self, watch: Watch, new_state: AlertState, rate: Decimal, now: datetime

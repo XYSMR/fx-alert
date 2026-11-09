@@ -175,9 +175,12 @@ def _check_rates(
                     continue
                 remaining -= 1
                 result.notified.append(w.label)
-                store.record_alert(w, rate, local_now)
+                if not store.record_alert(w, rate, local_now):
+                    # 使用者剛好在檢查期間刪除帳號（或刪除規則）：略過，不算錯誤
+                    log(f"{w.label}: 規則已不存在（可能剛刪除帳號），略過記錄")
             elif not store.record_transition(w, decision.next_state, rate, local_now):
-                log(f"{w.label}: 狀態在檢查期間被變更，這次不更新")
+                # 規則被刪除、或狀態被使用者改過（例如重新開啟 Email）：這次不更新
+                log(f"{w.label}: 規則在檢查期間被變更或刪除，這次不更新")
         except StoreError as exc:
             # 一條規則寫入失敗，不影響其他規則
             result.errors.append(f"{w.label} 狀態寫入失敗：{exc}")

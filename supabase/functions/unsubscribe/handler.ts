@@ -17,8 +17,11 @@ const SIG_RE = /^[A-Za-z0-9_-]{43}$/; // 32 bytes 的 base64url，沒有補 =
 export interface Deps {
   secret: string;
   allowedOrigins: string[];
-  /** 把這個使用者的 email_enabled 設成 false；重複呼叫也沒關係 */
-  disable: (userId: string) => Promise<void>;
+  /**
+   * 把這個使用者的 email_enabled 設成 false；重複呼叫也沒關係。
+   * 回傳 false = 找不到這個帳號（已經刪除）：本來就不會再寄信，對使用者來說一樣是成功。
+   */
+  disable: (userId: string) => Promise<boolean>;
 }
 
 const encoder = new TextEncoder();
@@ -121,11 +124,13 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     return json(403, { ok: false, error: "invalid_link" }, cors);
   }
 
+  let found: boolean;
   try {
-    await deps.disable(params.u.toLowerCase());
+    found = await deps.disable(params.u.toLowerCase());
   } catch {
     // 不把資料庫錯誤細節回給呼叫者
     return json(500, { ok: false, error: "update_failed" }, cors);
   }
-  return json(200, { ok: true }, cors);
+  // 帳號已刪除的人點舊信的連結：不是錯誤，告訴他已經不會再收到通知
+  return json(200, { ok: true, status: found ? "unsubscribed" : "no_account" }, cors);
 }

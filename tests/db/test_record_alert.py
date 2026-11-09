@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from decimal import Decimal as D
 
+import pytest
+
 DENIED = "42501"
 NOT_NULL = "23502"
 
@@ -71,3 +73,39 @@ def test_does_not_touch_other_rules(db, alice, bob):
     db.one(CALL, (a, "0.2040", "0.205"))
     assert _rule(db, b)[0] == "armed"
     assert _notes(db, bob) == []
+
+
+# ---------------------------------------------------------------------------
+# 排程檢查期間，使用者刪除帳號
+# ---------------------------------------------------------------------------
+
+
+def test_user_deleted_before_record_returns_null(db, alice, bob):
+    """規則跟著帳號一起被刪除 → null，別人不受影響。"""
+    a = db.add_rule(alice, "JPY", "0.205")
+    b = db.add_rule(bob, "JPY", "0.205")
+    db.as_postgres()
+    db.run("delete from auth.users where id = %s", (alice,))
+    db.as_service()
+    assert db.one(CALL, (a, "0.2040", "0.205")) is None
+    assert db.one(CALL, (b, "0.2040", "0.205")) is not None
+    assert _notes(db, bob) == [(b, "JPY", D("0.204"), D("0.205"))]
+
+
+def test_user_deleted_during_record_returns_null_and_rolls_back(db, alice):
+    """刪除和 record_alert 同時進行：寫通知紀錄時帳號已不存在 → null，狀態也不改。
+
+    用 session_replication_role 暫時關掉外鍵檢查，做出「規則還在、帳號已經不在」的瞬間。
+    這需要 superuser；CI 的 Supabase 不一定允許，不允許就略過（上一個測試仍涵蓋主要情況）。
+    """
+    rule = db.add_rule(alice, "JPY", "0.205")
+    db.as_postgres()
+    try:
+        db.run("set local session_replication_role = replica")
+    except Exception:  # noqa: BLE001
+        pytest.skip("這個資料庫不允許 session_replication_role")
+    db.run("delete from public.profiles where user_id = %s", (alice,))
+    db.run("set local session_replication_role = origin")
+    db.as_service()
+    assert db.one(CALL, (rule, "0.2040", "0.205")) is None
+    assert _rule(db, rule) == ("armed", None, None, None)

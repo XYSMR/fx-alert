@@ -16,24 +16,27 @@ const SECRET = Deno.env.get("UNSUBSCRIBE_SECRET") ?? "";
 
 const ALLOWED_ORIGINS = ["https://xysmr.github.io", "http://localhost:8000"];
 
-async function disable(userId: string): Promise<void> {
+/** 回傳 false = 沒有這個帳號（已經刪除） */
+async function disable(userId: string): Promise<boolean> {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${encodeURIComponent(userId)}`,
+    `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${encodeURIComponent(userId)}&select=user_id`,
     {
       method: "PATCH",
       headers: {
         apikey: SERVICE_KEY,
         Authorization: `Bearer ${SERVICE_KEY}`,
         "Content-Type": "application/json",
-        Prefer: "return=minimal",
+        Prefer: "return=representation",
       },
       body: JSON.stringify({ email_enabled: false }),
     },
   );
   if (!res.ok) {
-    console.error(`profiles update failed: ${res.status}`); // 不記錄 user_id 以外的資料
+    console.error(`profiles update failed: ${res.status}`); // 不記錄任何個人資料
     throw new Error("update failed");
   }
+  const rows = await res.json();
+  return Array.isArray(rows) && rows.length > 0;
 }
 
 Deno.serve((req) => handle(req, { secret: SECRET, allowedOrigins: ALLOWED_ORIGINS, disable }));

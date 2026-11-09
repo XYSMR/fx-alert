@@ -33,12 +33,22 @@
 
 ## 一鍵退訂（HMAC，沒有 token 表）
 
-- 連結：`https://xysmr.github.io/fx-alert/unsubscribe.html?u=<user_id>&s=<簽章>`
-- 簽章：`HMAC-SHA256(UNSUBSCRIBE_SECRET, "fx-alert:unsubscribe:v1:" + user_id)`，base64url。
-  同一個人的簽章永遠相同，所以**舊信的連結一直有效**。
-- 密鑰放兩個地方：GitHub Secrets（排程產生連結）、Edge Function secrets（驗證）。換密鑰會讓所有舊連結失效。
-- `List-Unsubscribe` + `List-Unsubscribe-Post` 指向 Edge Function（POST 直接退訂）；
-  使用者點連結（GET）會開 GitHub Pages 上的確認頁，按下按鈕再 POST。
+- 簽章：`HMAC-SHA256(UNSUBSCRIBE_SECRET, "fx-alert:unsubscribe:v1:" + user_id)`，base64url（不補 `=`）。
+  同一個人的簽章永遠相同，所以**舊信的連結一直有效**；換密鑰會讓所有舊連結失效。
+  Python（`src/fx_alert/unsubscribe.py`）和 Edge Function（`supabase/functions/unsubscribe/handler.ts`）
+  用同一組測試向量確保算法一致。
+- 密鑰放兩個地方：GitHub Secrets（排程產生連結）、Edge Function secrets（驗證）。
+- 信裡有兩種連結：
+  - 內文：`https://xysmr.github.io/fx-alert/unsubscribe.html?u=<user_id>&s=<簽章>&p=<專案代號>`，
+    打開只顯示按鈕，按下才 POST 給 Edge Function。
+  - `List-Unsubscribe: <https://<專案>.supabase.co/functions/v1/unsubscribe?u=…&s=…>` 和
+    `List-Unsubscribe-Post: List-Unsubscribe=One-Click`，信箱的「取消訂閱」按鈕會直接 POST。
+- Edge Function **只接受 POST**（GET 回 405）：信箱的連結掃描器會自動打開連結，不能因此退訂。
+  不檢查 JWT（`verify_jwt = false`），身分由簽章驗證。
+- 限制：用個人 Gmail 經 SMTP 寄信時，Gmail 的 DKIM 簽章不一定涵蓋 List-Unsubscribe 標頭，
+  所以信箱的「取消訂閱」按鈕不一定出現；內文連結一定可用。要完整支援需改用自有網域的寄信服務。
+- 本機產生某人的連結（測試用；拒絕在 GitHub Actions 執行，避免連結進公開 log）：
+  `python -m fx_alert unsubscribe-link --user-id <uuid>`（需要 `UNSUBSCRIBE_SECRET`、`SUPABASE_URL`）
 
 ## 開發步驟（每步一個分支、一個 PR）
 
@@ -47,7 +57,7 @@
 | 1 | `feat/db-schema` | 資料表、欄位權限、RLS、trigger、CI 的本機 Supabase 測試 |
 | 2 | `feat/rule-store` | 狀態存取抽成介面：`FileStore`（現在）、`SupabaseStore`（新） |
 | 3 | `feat/multi-user-check` | `--mode single/multi`；規則從 view `active_rules` 讀（排除 Email 關閉的人與停用的規則）；每日寄信上限 `email.daily_limit`；多人版 `--dry-run` 只讀；錯誤訊息遮蔽 email；手動的 `staging-check` workflow |
-| 4 | `feat/unsubscribe` | HMAC 簽章、Edge Function、確認頁、退訂 header；測試舊信連結仍有效、竄改的簽章被拒 |
+| 4 | `feat/unsubscribe` | HMAC 簽章、Edge Function（Deno 測試）、確認頁、退訂 header；測試舊信連結仍有效、竄改的簽章被拒 |
 | 5 | `feat/frontend-auth` | 見下方 |
 | 6 | `feat/delete-account` | 刪除帳號 Edge Function（驗證使用者 JWT → 用 secret key 刪除）＋前端按鈕 |
 | 7 | `feat/migrate-me` | 把 `config.yaml` 目標價、`state.json` 狀態、`alerts.csv` 搬到你的帳號 |

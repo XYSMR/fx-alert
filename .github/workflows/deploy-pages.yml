@@ -68,7 +68,8 @@ jobs:
       - name: Assemble site
         run: |
           mkdir _site
-          cp -r site/index.html site/style.css site/app.js site/vendor site/data.json _site/
+          cp -r site/index.html site/style.css site/app.js site/vendor site/data.json \
+            site/unsubscribe.html site/unsubscribe.js _site/
           find _site -type f | sort
 
       # 最後一道防線：公開的檔案裡不能出現 email 或 SMTP 字樣

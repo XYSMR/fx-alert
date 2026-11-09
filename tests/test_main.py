@@ -340,11 +340,12 @@ def test_cli_multi_mode_does_not_need_mail_to(tmp_path, monkeypatch):
     seen = {}
 
     def fake_run_check(cfg, notifier, email_cfg, **kw):
-        seen.update(store=kw["store"], email_cfg=email_cfg)
+        seen.update(store=kw["store"], email_cfg=email_cfg, unsubscribe=kw["unsubscribe"])
         return main_mod.CheckResult()
 
     monkeypatch.setattr(main_mod, "run_check", fake_run_check)
-    monkeypatch.setenv("SUPABASE_URL", "https://abcd.supabase.co")
+    monkeypatch.setenv("UNSUBSCRIBE_SECRET", "x" * 40)
+    monkeypatch.setenv("SUPABASE_URL", "https://abcdefghijklmnopqrst.supabase.co")
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_TESTONLY")
     monkeypatch.setenv("SMTP_USER", "sender@example.com")
     monkeypatch.setenv("SMTP_PASSWORD", "x")
@@ -353,6 +354,38 @@ def test_cli_multi_mode_does_not_need_mail_to(tmp_path, monkeypatch):
     assert main_mod.main(["check", "--mode", "multi", "--config", str(ROOT / "config.yaml")]) == 0
     assert type(seen["store"]).__name__ == "SupabaseStore"
     assert seen["email_cfg"].to == ()
+    assert seen["unsubscribe"].project_ref == "abcdefghijklmnopqrst"
+
+
+def test_cli_multi_mode_requires_unsubscribe_secret(monkeypatch, capsys):
+    monkeypatch.setenv("SUPABASE_URL", "https://abcdefghijklmnopqrst.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_TESTONLY")
+    monkeypatch.setenv("SMTP_USER", "sender@example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "x")
+    monkeypatch.delenv("UNSUBSCRIBE_SECRET", raising=False)
+    assert main_mod.main(["check", "--mode", "multi", "--config", str(ROOT / "config.yaml")]) == 1
+    assert "UNSUBSCRIBE_SECRET" in capsys.readouterr().err
+
+
+def test_cli_unsubscribe_link(monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("UNSUBSCRIBE_SECRET", "x" * 40)
+    monkeypatch.setenv("SUPABASE_URL", "https://abcdefghijklmnopqrst.supabase.co")
+    uid = "00000000-0000-4000-8000-000000000001"
+    assert main_mod.main(["unsubscribe-link", "--user-id", uid]) == 0
+    out = capsys.readouterr().out
+    assert f"https://xysmr.github.io/fx-alert/unsubscribe.html?u={uid}&s=" in out
+    assert "&p=abcdefghijklmnopqrst" in out
+    assert f"https://abcdefghijklmnopqrst.supabase.co/functions/v1/unsubscribe?u={uid}&s=" in out
+
+
+def test_cli_unsubscribe_link_refuses_in_actions(monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("UNSUBSCRIBE_SECRET", "x" * 40)
+    monkeypatch.setenv("SUPABASE_URL", "https://abcdefghijklmnopqrst.supabase.co")
+    args = ["unsubscribe-link", "--user-id", "00000000-0000-4000-8000-000000000001"]
+    assert main_mod.main(args) == 1
+    assert "https://" not in capsys.readouterr().out
 
 
 def test_cli_multi_dry_run_is_read_only(monkeypatch):
@@ -362,6 +395,7 @@ def test_cli_multi_dry_run_is_read_only(monkeypatch):
         "run_check",
         lambda *a, **kw: seen.update(store=kw["store"]) or main_mod.CheckResult(),
     )
+    monkeypatch.delenv("UNSUBSCRIBE_SECRET", raising=False)  # dry-run 沒有密鑰也能跑
     monkeypatch.setenv("SUPABASE_URL", "https://abcd.supabase.co")
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_TESTONLY")
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)

@@ -82,7 +82,7 @@ python -m pip install -e ".[dev]"
 
 python -m pytest                           # Python 測試
 python -m ruff check .                     # lint
-node --test site/tests/app.test.js         # 前端測試（選用，需要 Node.js）
+node --test site/tests/app.test.js site/tests/unsubscribe.test.js  # 前端測試（選用，需要 Node.js）
 # 資料庫 RLS 測試（tests/db）需要 Supabase CLI + Docker，沒有的話會自動略過、交給 CI 跑
 
 python -m fx_alert validate-config         # 驗證 config.yaml
@@ -115,6 +115,7 @@ src/fx_alert/
   rules.py        到價狀態機（純函式）
   state_store.py  讀寫 state.json
   store.py        規則與狀態的存放處：FileStore（單人版）／SupabaseStore（多人版）
+  unsubscribe.py  一鍵退訂的 HMAC 簽章與連結
   history.py      走勢、通知紀錄、最後檢查
   notifier.py     Gmail SMTP / dry-run
   config.py       讀取並驗證 config.yaml、檢查時段
@@ -122,6 +123,7 @@ src/fx_alert/
   main.py         CLI：check / validate-config / build-site
 site/
   index.html  style.css  app.js     儀表板（純 HTML/JS，無建置步驟）
+  unsubscribe.html  unsubscribe.js  退訂確認頁
   vendor/chart.umd.min.js           Chart.js 4.6.1（MIT）
   samples/                          本機預覽用的範例資料（不部署；scripts/make_samples.py 產生）
   tests/app.test.js                 前端單元測試（不部署）
@@ -131,6 +133,7 @@ site/
 supabase/
   config.toml                       本機 Supabase 設定（CI 用）
   migrations/                       多人版資料表、權限、RLS
+  functions/unsubscribe/            一鍵退訂 Edge Function（Deno）
 tests/db/                           RLS 測試（需要 SUPABASE_DB_URL）
 docs/multi-user.md                  多人版設計與開發步驟
 ```

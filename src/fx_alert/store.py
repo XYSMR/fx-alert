@@ -57,6 +57,7 @@ class Watch:
     state: AlertState | None  # None = 沒有紀錄（第一次），視為等待中
     state_target: Decimal | None  # 進入目前狀態時的目標價；給 rules.decide 判斷「改過目標價」
     recipients: tuple[str, ...] = field(repr=False)
+    user_id: str | None = None  # 多人版才有；用來產生退訂連結
 
 
 class RuleStore(Protocol):
@@ -140,6 +141,7 @@ TIMEOUT_SECONDS = 15
 _RULE_COLUMNS = ",".join(
     [
         "id",
+        "user_id",
         "currency",
         "target::text",
         "effective_buffer::text",
@@ -292,16 +294,25 @@ class ReadOnlyStore:
 
 def _row_to_watch(row: dict) -> Watch:
     currency = row["currency"]
-    rule = Rule(currency, target=Decimal(row["target"]), buffer=Decimal(row["effective_buffer"]))
+    rule = Rule(currency, target=_dec(row["target"]), buffer=_dec(row["effective_buffer"]))
     state_target = row.get("state_target")
     return Watch(
         key=str(row["id"]),
         label=f"{currency} 規則#{row['id']}",
         rule=rule,
         state=AlertState(row["state"]),
-        state_target=None if state_target is None else Decimal(state_target),
+        state_target=None if state_target is None else _dec(state_target),
         recipients=(row["email"],),
+        user_id=row["user_id"],
     )
+
+
+def _dec(text: str) -> Decimal:
+    """資料庫的 numeric(12,6) 會帶多餘的 0（0.300000）；去掉，信件和 log 比較好讀。"""
+    d = Decimal(text)
+    if not d.is_finite():
+        raise InvalidOperation(text)
+    return Decimal(format(d.normalize(), "f"))
 
 
 def _error_message(resp: requests.Response) -> str:

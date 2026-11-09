@@ -153,6 +153,7 @@ def sb(*responses):
 ROWS = [
     {
         "id": 7,
+        "user_id": "0b6f3c1e-1111-4a1a-9a1a-000000000007",
         "currency": "JPY",
         "target": "0.205000",
         "effective_buffer": "0.001025",
@@ -162,6 +163,7 @@ ROWS = [
     },
     {
         "id": 9,
+        "user_id": "0b6f3c1e-2222-4a1a-9a1a-000000000009",
         "currency": "KRW",
         "target": "0.025000",
         "effective_buffer": "0.000200",

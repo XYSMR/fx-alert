@@ -21,6 +21,7 @@
 
   <main>
     <p class="notice" id="load-error" hidden></p>
+    <p class="notice warn" id="status-banner" role="status" hidden></p>
 
     <section aria-labelledby="cards-title">
       <h2 id="cards-title" class="visually-hidden">各幣別目前狀況</h2>
@@ -49,6 +50,13 @@
         <tbody id="alerts-body"></tbody>
       </table>
       <p class="empty" id="alerts-empty" hidden>還沒有任何到價通知。</p>
+    </section>
+    <section class="panel edit" aria-labelledby="edit-title">
+      <h2 id="edit-title">修改目標價</h2>
+      <p>目標價和 buffer 設定在 repo 的 <code>config.yaml</code>，在 GitHub 網頁上就能直接修改。</p>
+      <a class="button" id="edit-link" href="https://github.com/XYSMR/fx-alert/edit/main/config.yaml"
+         target="_blank" rel="noopener">✎ 在 GitHub 修改目標價</a>
+      <p class="hint">頁面約 1 分鐘更新，到價判斷會在下一次排程檢查時套用新目標。</p>
     </section>
   </main>
 

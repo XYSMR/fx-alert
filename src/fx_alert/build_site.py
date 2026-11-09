@@ -97,6 +97,13 @@ def build_data(
         "source": {"bank": "兆豐銀行", "rate_type": BANK_LABEL.split()[-1], "url": RATE_PAGE},
         "repo_url": f"https://github.com/{repo}",
         "edit_config_url": f"https://github.com/{repo}/edit/main/config.yaml",
+        "actions_url": f"https://github.com/{repo}/actions/workflows/check-rates.yml",
+        # 前端用來判斷「資料是不是太久沒更新」：只有在檢查時段內才算過期
+        "business_hours": {
+            "weekdays_only": cfg.hours.weekdays_only,
+            "start": f"{cfg.hours.start:%H:%M}",
+            "end": f"{cfg.hours.end:%H:%M}",
+        },
         "currencies": currencies,
         "alerts": alerts,
     }

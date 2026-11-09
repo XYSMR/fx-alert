@@ -77,6 +77,10 @@ def test_build_data_full(cfg):
     assert data["quoted_at"] == "2026-11-09T16:10:12+08:00"
     assert data["last_check"] == {"at": "2026-11-09T16:12:10+08:00", "ok": True, "errors": 0}
     assert data["edit_config_url"] == "https://github.com/XYSMR/fx-alert/edit/main/config.yaml"
+    assert (
+        data["actions_url"] == "https://github.com/XYSMR/fx-alert/actions/workflows/check-rates.yml"
+    )
+    assert data["business_hours"] == {"weekdays_only": True, "start": "09:00", "end": "16:30"}
 
     jpy, krw = data["currencies"]
     assert jpy == {

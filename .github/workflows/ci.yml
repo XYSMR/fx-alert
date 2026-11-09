@@ -1,4 +1,4 @@
-# CI：每次 push 到 main 或開 PR，都驗證 config.yaml、跑 lint 和測試。
+# CI：每次 push 到 main 或開 PR，都驗證 config.yaml、跑 lint 和測試（Python + 前端）。
 name: ci
 
 on:
@@ -50,3 +50,15 @@ jobs:
 
       - name: Test
         run: python -m pytest -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Frontend unit tests
+        # 只用 Node 內建的測試工具，不需要 npm install
+        run: node --test site/tests/*.test.js

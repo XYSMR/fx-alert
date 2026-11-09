@@ -10,6 +10,12 @@
   },
   "repo_url": "https://github.com/XYSMR/fx-alert",
   "edit_config_url": "https://github.com/XYSMR/fx-alert/edit/main/config.yaml",
+  "actions_url": "https://github.com/XYSMR/fx-alert/actions/workflows/check-rates.yml",
+  "business_hours": {
+    "weekdays_only": true,
+    "start": "09:00",
+    "end": "16:30"
+  },
   "currencies": [
     {
       "code": "JPY",

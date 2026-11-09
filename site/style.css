@@ -48,12 +48,16 @@ a { color: var(--waiting); }
 .meta dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ok { color: #1d6b3a; }
 .bad { color: var(--error); }
+.warn { color: #6b4a00; }
 
 /* ---------- 提示 ---------- */
 .notice {
   padding: 12px 16px; border-radius: var(--radius);
   background: var(--error-bg); color: var(--error); margin: 0 0 16px;
 }
+
+.notice.warn { background: #fff6d6; color: #6b4a00; }
+.notice a { color: inherit; font-weight: 600; }
 
 /* ---------- 卡片 ---------- */
 .cards {
@@ -118,6 +122,29 @@ a { color: var(--waiting); }
 .alerts th { text-align: left; font-size: .85rem; color: var(--muted); font-weight: 600; }
 .alerts th, .alerts td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .alerts tr:last-child td { border-bottom: 0; }
+
+/* ---------- 修改目標價 ---------- */
+.edit p { margin: 0 0 12px; }
+.edit code { background: var(--bg); padding: 1px 6px; border-radius: 6px; }
+.button {
+  display: inline-block; padding: 10px 18px; border-radius: 10px;
+  background: var(--text); color: #fff; text-decoration: none; font-weight: 600;
+}
+.button:hover { background: #33404f; }
+.button:focus-visible { outline: 3px solid var(--waiting); outline-offset: 2px; }
+.edit .hint { margin: 12px 0 0; color: var(--muted); font-size: .9rem; }
+
+/* ---------- 手機 ---------- */
+@media (max-width: 640px) {
+  body { padding: 16px 12px 32px; }
+  h1 { font-size: 1.35rem; }
+  .card, .panel { padding: 16px; }
+  .rate { font-size: 2.2rem; }
+  .chart-box { height: 240px; }
+  .tabs button { min-height: 36px; }          /* 手指好點 */
+  .alerts th, .alerts td { padding: 8px 6px; font-size: .9rem; }
+  .button { display: block; text-align: center; }
+}
 
 /* ---------- 頁尾 ---------- */
 .page-footer { margin-top: 32px; color: var(--muted); font-size: .85rem; }

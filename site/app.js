@@ -44,6 +44,45 @@ function distanceText(pct) {
 
 const STATUS_LABEL = { waiting: "等待中", triggered: "已到價" };
 
+const STALE_AFTER_MINUTES = 120;
+
+/** "09:00" → 540 */
+function toMinutes(hhmm) {
+  const [h, m] = String(hhmm).split(":").map(Number);
+  return h * 60 + m;
+}
+
+/**
+ * 資料是不是「太久沒更新」？只有在檢查時段內才算：
+ * 從「今天開始檢查的時間」和「最後一次檢查」中較晚的那個算起，超過 2 小時就算過期。
+ * （週末、晚上沒有新資料是正常的；早上剛開始的前 2 小時也不會誤報。）
+ */
+function isStale(lastCheck, hours, now = new Date()) {
+  if (!hours) return false;
+  const tw = new Date(now.getTime() + 8 * 3600 * 1000); // 換成台灣時間（UTC+8，無日光節約）
+  const day = tw.getUTCDay();
+  if (hours.weekdays_only && (day === 0 || day === 6)) return false;
+  const nowMin = tw.getUTCHours() * 60 + tw.getUTCMinutes();
+  const start = toMinutes(hours.start);
+  if (nowMin < start || nowMin > toMinutes(hours.end)) return false;
+  const sinceOpen = nowMin - start;
+  const sinceCheck = lastCheck ? (now - new Date(lastCheck.at)) / 60000 : Infinity;
+  return Math.min(sinceOpen, sinceCheck) > STALE_AFTER_MINUTES;
+}
+
+/** 頁頂提示：最後檢查有錯誤 → 提示；太久沒更新 → 提示；都沒有 → null */
+function bannerText(data, now = new Date()) {
+  const lc = data.last_check;
+  if (lc && lc.ok === false) {
+    return `最後一次檢查（${formatTime(lc.at)}）發生 ${lc.errors} 個錯誤，資料可能不完整。`;
+  }
+  if (isStale(lc, data.business_hours, now)) {
+    const when = lc ? `最後一次檢查是 ${timeAgo(lc.at, now)}` : "今天還沒有檢查紀錄";
+    return `資料可能過期：${when}。`;
+  }
+  return null;
+}
+
 // ---------- 畫面 ----------
 
 function setText(id, text) {
@@ -57,12 +96,27 @@ function renderHeader(data) {
   const lc = data.last_check;
   const el = document.getElementById("last-check");
   if (lc) {
-    el.textContent = `${formatTime(lc.at)}（${timeAgo(lc.at)}）${lc.ok ? " ✓ 正常" : " ✕ 有錯誤"}`;
-    el.className = lc.ok ? "ok" : "bad";
+    const stale = lc.ok && isStale(lc, data.business_hours);
+    const label = !lc.ok ? " ✕ 有錯誤" : stale ? " ⚠ 可能過期" : " ✓ 正常";
+    el.textContent = `${formatTime(lc.at)}（${timeAgo(lc.at)}）${label}`;
+    el.className = !lc.ok ? "bad" : stale ? "warn" : "ok";
   } else {
     el.textContent = "尚未執行";
   }
   setText("quoted-at", formatTime(data.quoted_at));
+
+  const banner = document.getElementById("status-banner");
+  const message = bannerText(data);
+  banner.hidden = !message;
+  if (message) {
+    const link = document.createElement("a");
+    link.href = data.actions_url || "#";
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "查看 GitHub Actions";
+    banner.replaceChildren(`${message} `, link);
+  }
+  if (data.edit_config_url) document.getElementById("edit-link").href = data.edit_config_url;
   setText("generated-at", formatTime(data.generated_at));
   if (data.repo_url) document.getElementById("repo-link").href = data.repo_url;
 }
@@ -248,4 +302,9 @@ async function main() {
   renderAlerts(data);
 }
 
-main();
+// 瀏覽器裡直接執行；在 Node（測試）裡則只匯出純函式
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { dataUrl, formatTime, timeAgo, distanceText, toMinutes, isStale, bannerText, chartSummary };
+} else {
+  main();
+}

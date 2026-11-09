@@ -17,6 +17,10 @@ dev = [
     "pytest>=8",
     "ruff>=0.5",
 ]
+# 只有跑 tests/db（Supabase 資料表與 RLS）才需要
+db = [
+    "psycopg[binary]>=3.2",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -120,39 +120,68 @@ python -m fx_alert migrate-me --email <你的 Gmail> --data-dir <state 分支的
 - 寫入在同一個交易裡；帳號已經有提醒就拒絕，`--replace` 會在同一個交易裡先刪掉他的通知紀錄和規則再寫入（執行幾次結果都一樣）。
 - 寫完重新讀回來比對：數字用 Decimal（0.0250 = 0.025），時間轉成時間點（+08:00 和 UTC 是同一刻就相同）。
 
-### 第 8 步：切換流程（草稿，第 8 步開始前再確認一次）
+### 第 8 步：切換流程（2026-11-10 確認版）
 
-**切換前**
+#### Edge Function 的金鑰
 
-- [ ] ⚠ **提醒使用者：決定韓元目標價**，更新 `config.yaml` 並合併（搬家會用這個值）
-- [ ] 正式專案設定完成：migrations、兩個 Edge Function（Verify JWT 關閉）、`UNSUBSCRIBE_SECRET`、Google 登入、Site URL / Redirect URLs
-- [ ] GitHub Secrets：`SUPABASE_URL`、`SUPABASE_SECRET_KEY`、`UNSUBSCRIBE_SECRET`（正式專案的值）
-- [ ] GitHub Variables：`SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`（正式專案）；`AUTH_ENABLED` 先維持未設定
+兩支 function 都不使用舊版的 `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY`（`keys.ts`，兩份副本必須相同）：
 
-**切換**
+| 用途 | 從哪裡讀 | 放在哪個 header |
+|---|---|---|
+| secret key（退訂時更新 profile、刪除帳號） | 自訂 Edge Function Secret `FX_SECRET_KEY`（`sb_secret_…`） | 只放 `apikey` |
+| publishable key（驗證使用者 token） | Supabase 自動提供的 `SUPABASE_PUBLISHABLE_KEYS` 的 `default` | `apikey`，token 放 `Authorization` |
 
-1. Actions → check-rates → **Disable workflow**（暫停單人版排程，state 分支從這一刻起不再變動）
-2. 本機用 Google 登入一次正式專案（建立 profile）
-3. 取出 state 分支：`git fetch origin state` → `git worktree add ../fx-state origin/state`
-4. `migrate-me --dry-run` 確認內容 → 正式搬家 → 比對必須完全一致
-5. 合併 `chore/cutover` PR（check-rates 改 `--mode multi`；`data.json` 不再含目標價與通知紀錄）
-6. Variables 設 `AUTH_ENABLED=true` → 重新部署 Pages → 確認沒登入看不到目標價、登入後看得到
-7. Enable check-rates → 手動 Run 一次 → 確認 log 只有規則編號、狀態正確
+讀不到或格式不對時，function 回 500 `not_configured`（GET 仍回 405）。
+建議建兩把 secret key：`github-actions`（GitHub Secret `SUPABASE_SECRET_KEY`）和 `edge-functions`（`FX_SECRET_KEY`），
+其中一把外洩時只撤銷那一把。
 
-**切換後**
+#### 冒煙測試（後面每次都跑這套）
 
-- [ ] **重新產生正式專案的 secret key**（Supabase → API Keys → 新增一把、更新 GitHub Secrets `SUPABASE_SECRET_KEY`、確認排程正常後刪除舊的）。搬家時這把 key 曾在本機環境變數出現過。
-- [ ] state 分支的 `state.json`、`alerts.csv` **保留不刪**（退回方案要用）
-- [ ] `MAIL_TO` 穩定運作一週後再刪（退回方案要用）
+1. 兩支 function 用 GET → 405
+2. delete-account 不帶 token → 401 `not_logged_in`
+3. unsubscribe 錯誤簽章 → 403 `invalid_link`
+4. **測 secret key**：本機用環境變數提供該專案的 `UNSUBSCRIBE_SECRET`、`SUPABASE_URL`，
+   `python -m fx_alert unsubscribe-link --user-id 00000000-0000-0000-0000-000000000000`，
+   再用 `Invoke-RestMethod -Method Post` 送出 → 200 `no_account`（連結只出現在本機）
+5. **測 publishable key**：登入後呼叫 delete-account，確認文字故意填錯 → 400 `confirm_mismatch`
+   （登入超過 10 分鐘會是 401 `reauth_required`，也算通過；兩種都不會刪任何東西）
 
-**退回方案（切回單人模式）**
+#### A. 切換前（不影響單人版）
 
-1. Actions → check-rates → Disable workflow
-2. Variables：`AUTH_ENABLED` 刪除或設為 `false`（頁面立刻回到單人版顯示，不出現登入）
-3. 在 GitHub 對 `chore/cutover` 的合併按 **Revert**，開 PR 合併（check-rates 回到單人模式；`config.yaml` 的目標價仍在）
-4. 確認 `MAIL_TO` 還在（不在就加回）
-5. 狀態：state 分支停在切換那一刻。如果多人版期間有到價通知，對照 Supabase 的狀態手動更新 `state.json`；不更新的話，最壞情況是同一次到價再寄一封
-6. Enable check-rates → 手動 Run 一次（建議先勾 dry_run）→ 確認 log 與頁面正常
+- [ ] A1 使用者用 PR 修改 `config.yaml` 的韓元目標價並合併（B 開始前必須完成）
+- [ ] A2 `feat/edge-new-keys`：兩支 function 改用新金鑰；staging 和正式專案都設好 `FX_SECRET_KEY`；
+      先部署 staging 跑完整冒煙測試，再部署正式專案跑完整冒煙測試
+- [ ] A3 `feat/export-state`：反向匯出（退回方案用），見下方
+- [ ] A4 GitHub Secrets 換成正式專案：`SUPABASE_URL`、`SUPABASE_SECRET_KEY`、`UNSUBSCRIBE_SECRET`（和 Edge Function 同值）；
+      Variables：`SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`；`AUTH_ENABLED` 先不設
+- [ ] A5 從 state 分支下載 `state.json`、`alerts.csv` 存在本機
+
+#### B. 切換中
+
+1. 確認 A1～A5 完成、冒煙測試全過
+2. Actions → check-rates → **Disable workflow**
+3. localhost 用 Google 登入正式專案（建立 profile）
+4. `git fetch origin state` → `git worktree add ..\fx-state origin/state`
+5. `$env:SUPABASE_SECRET_KEY` 提供金鑰；`migrate-me --dry-run` → 正式搬家 → 比對必須完全一致
+6. 合併 `chore/cutover` PR
+7. Variables 設 `AUTH_ENABLED=true` → 重新部署 Pages → 確認可以登入、只看得到自己的規則
+8. Enable check-rates → 手動 Run 一次 → 確認 log 沒有 email
+
+#### C. 切換後
+
+- [ ] C1 **必做**：從正式專案的 Redirect URLs 移除 `http://localhost:8000/`。之後本機開發一律產生指向 staging 的 `config.js`
+- [ ] C2 冒煙測試 1～4；5 改在線上頁面做
+- [ ] C3 **輪替 secret key**：建兩把新的 → 更新 GitHub Secret `SUPABASE_SECRET_KEY` 和 Edge Function Secret `FX_SECRET_KEY`
+      → 冒煙測試 + 手動 Run check-rates → 刪除舊的兩把 → **再跑一次冒煙測試**（確認沒有地方還在用舊 key）
+- [ ] C4 `state.json`、`alerts.csv` 保留；`MAIL_TO` 一週後再刪
+
+#### D. 退回方案（切回單人模式）
+
+1. Disable check-rates；刪除 Variable `AUTH_ENABLED` → 重新部署 Pages（登入按鈕消失）
+2. `export-state --dry-run` 確認 → 寫入 state 分支的 worktree → commit。
+   **不要用切換前的備份覆蓋**：多人版已經寄過的通知可能再寄一次。備份只在 `export-state` 失敗時用，並接受可能重複寄信
+3. Revert `chore/cutover` PR；`MAIL_TO` 已經刪了就加回
+4. Enable check-rates → 手動 Run 一次（建議先 dry_run）。正式專案的資料不刪，下次切換用 `--replace`
 
 ### 待辦（第 8 步之後）
 

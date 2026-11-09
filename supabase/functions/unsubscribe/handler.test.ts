@@ -22,6 +22,7 @@ const SITE = "https://xysmr.github.io";
 function setup(fail = false, accountExists = true) {
   const disabled: string[] = [];
   const deps = {
+    configured: true,
     secret: SECRET,
     allowedOrigins: [SITE],
     disable: (u: string): Promise<boolean> => {
@@ -158,4 +159,19 @@ Deno.test("missing secret means not configured, never 'valid'", async () => {
   assertEquals(res.status, 500);
   await res.body?.cancel();
   assertEquals(disabled, []);
+});
+
+Deno.test("keys missing (not configured) → 500 not_configured, nothing disabled", async () => {
+  const { deps, disabled } = setup();
+  const res = await handle(oneClick(), { ...deps, configured: false });
+  assertEquals(res.status, 500);
+  assertEquals(await res.json(), { ok: false, error: "not_configured" });
+  assertEquals(disabled, []);
+});
+
+Deno.test("not configured still answers GET with 405 (smoke test order)", async () => {
+  const { deps } = setup();
+  const res = await handle(new Request(FN), { ...deps, configured: false });
+  assertEquals(res.status, 405);
+  await res.body?.cancel();
 });

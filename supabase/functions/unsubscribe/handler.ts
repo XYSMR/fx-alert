@@ -15,6 +15,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const SIG_RE = /^[A-Za-z0-9_-]{43}$/; // 32 bytes 的 base64url，沒有補 =
 
 export interface Deps {
+  /** 金鑰都讀得到（見 keys.ts）；false 時回 500 not_configured */
+  configured: boolean;
   secret: string;
   allowedOrigins: string[];
   /**
@@ -115,7 +117,7 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
       Allow: "POST, OPTIONS",
     });
   }
-  if (deps.secret.length < 32) {
+  if (!deps.configured || deps.secret.length < 32) {
     return json(500, { ok: false, error: "not_configured" }, cors);
   }
 

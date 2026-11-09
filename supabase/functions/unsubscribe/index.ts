@@ -1,17 +1,21 @@
-// Supabase Edge Function：一鍵退訂。邏輯在 handler.ts。
+// Supabase Edge Function：一鍵退訂。邏輯在 handler.ts，金鑰在 keys.ts。
 //
 // 需要的 secrets（Supabase 後台 → Edge Functions → Secrets）：
 //   UNSUBSCRIBE_SECRET   和 GitHub Secrets 裡的同一個值（至少 32 個字元）
-// Supabase 自動提供：SUPABASE_URL、SUPABASE_SERVICE_ROLE_KEY
+//   FX_SECRET_KEY        給 Edge Function 用的 secret key（sb_secret_…）
+// Supabase 自動提供：SUPABASE_URL
+// 不使用舊版的 SUPABASE_SERVICE_ROLE_KEY。
 //
 // 這個 function 不檢查 JWT（Gmail 和沒登入的人也要能呼叫），身分由簽章驗證：
 // supabase/config.toml 的 [functions.unsubscribe] verify_jwt = false，
 // 在後台部署時也要把「Verify JWT」關掉。
 
 import { handle } from "./handler.ts";
+import { secretKey, supabaseUrl } from "./keys.ts";
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const env = (name: string) => Deno.env.get(name);
+const SUPABASE_URL = supabaseUrl(env);
+const SECRET_KEY = secretKey(env);
 const SECRET = Deno.env.get("UNSUBSCRIBE_SECRET") ?? "";
 
 const ALLOWED_ORIGINS = ["https://xysmr.github.io", "http://localhost:8000"];
@@ -23,8 +27,7 @@ async function disable(userId: string): Promise<boolean> {
     {
       method: "PATCH",
       headers: {
-        apikey: SERVICE_KEY,
-        Authorization: `Bearer ${SERVICE_KEY}`,
+        apikey: SECRET_KEY ?? "", // 新版 secret key 只放 apikey
         "Content-Type": "application/json",
         Prefer: "return=representation",
       },
@@ -32,6 +35,7 @@ async function disable(userId: string): Promise<boolean> {
     },
   );
   if (!res.ok) {
+    await res.body?.cancel();
     console.error(`profiles update failed: ${res.status}`); // 不記錄任何個人資料
     throw new Error("update failed");
   }
@@ -39,4 +43,11 @@ async function disable(userId: string): Promise<boolean> {
   return Array.isArray(rows) && rows.length > 0;
 }
 
-Deno.serve((req) => handle(req, { secret: SECRET, allowedOrigins: ALLOWED_ORIGINS, disable }));
+Deno.serve((req) =>
+  handle(req, {
+    configured: SUPABASE_URL !== null && SECRET_KEY !== null,
+    secret: SECRET,
+    allowedOrigins: ALLOWED_ORIGINS,
+    disable,
+  })
+);

@@ -23,5 +23,5 @@ currencies:
     target: "0.205"
     buffer: "0.001"
   KRW:
-    target: "0.0250"   # 暫定值，請改成你想要的目標價
+    target: "0.0245"
     buffer: "0.0002"

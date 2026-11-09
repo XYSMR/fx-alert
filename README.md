@@ -17,7 +17,8 @@ deploy-pages（也會在 push 前端／設定／程式到 main 時執行）
   驗證 config → 從 state 分支取資料 → build-site → 防外洩檢查 → 部署
 
 ci（push 到 main 或開 PR）
-  validate-config ＋ 防外洩檢查、ruff、pytest（Python 3.11 / 3.13）、前端單元測試
+  validate-config ＋ 防外洩檢查、ruff、pytest（Python 3.11 / 3.13）、前端單元測試、
+  資料庫 RLS 測試（在 CI 裡啟動本機 Supabase）
 ```
 
 ### 到價規則
@@ -82,6 +83,7 @@ python -m pip install -e ".[dev]"
 python -m pytest                           # Python 測試
 python -m ruff check .                     # lint
 node --test site/tests/app.test.js         # 前端測試（選用，需要 Node.js）
+# 資料庫 RLS 測試（tests/db）需要 Supabase CLI + Docker，沒有的話會自動略過、交給 CI 跑
 
 python -m fx_alert validate-config         # 驗證 config.yaml
 python -m fx_alert check --dry-run --force # 實際抓匯率，但不寄信；資料寫到 data/
@@ -122,6 +124,11 @@ site/
   tests/app.test.js                 前端單元測試（不部署）
 .github/workflows/
   ci.yml  check-rates.yml  deploy-pages.yml
+supabase/
+  config.toml                       本機 Supabase 設定（CI 用）
+  migrations/                       多人版資料表、權限、RLS
+tests/db/                           RLS 測試（需要 SUPABASE_DB_URL）
+docs/multi-user.md                  多人版設計與開發步驟
 ```
 
 ## 資料來源

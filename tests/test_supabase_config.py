@@ -48,6 +48,6 @@ def test_secret_key_only_goes_in_apikey_header():
     """新版 secret key 不是 JWT：不能放進 Authorization。"""
     for name in ("unsubscribe", "delete-account"):
         src = (SUPABASE / "functions" / name / "index.ts").read_text("utf-8")
-        assert 'secretKey(env)' in src
+        assert "secretKey(env)" in src
         assert "Bearer ${SECRET_KEY" not in src
         assert "Authorization: `Bearer ${SECRET" not in src

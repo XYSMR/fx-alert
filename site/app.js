@@ -96,6 +96,130 @@ function renderCards(data) {
   box.replaceChildren(...data.currencies.map(renderCard));
 }
 
+// ---------- 走勢圖 ----------
+
+const COLORS = { rate: "#2f5fb3", target: "#a14a00", grid: "#e6e9ee", text: "#5b6676" };
+let chart = null;
+
+/** 走勢摘要文字（也給螢幕閱讀器用）：最高、最低、最新 */
+function chartSummary(c) {
+  if (!c.history.length) return `${c.code} 近 30 天還沒有走勢資料。`;
+  const values = c.history.map(([, v]) => Number(v));
+  const fmt = (n) => n.toFixed(4);
+  return `${c.code} 近 30 天：最高 ${fmt(Math.max(...values))}、最低 ${fmt(Math.min(...values))}、` +
+    `最新 ${c.rate}，目標 ≤ ${c.target}（共 ${values.length} 份牌告）。`;
+}
+
+function drawChart(c) {
+  const labels = c.history.map(([t]) => formatTime(t));
+  const rates = c.history.map(([, v]) => Number(v));
+  const target = Number(c.target);
+  const canvas = document.getElementById("chart");
+  canvas.setAttribute("aria-label", chartSummary(c));
+  setText("chart-summary", chartSummary(c));
+
+  if (chart) chart.destroy();
+  chart = null;
+  // 沒有走勢資料：不畫空白座標，只留下說明文字
+  document.querySelector(".chart-box").hidden = c.history.length === 0;
+  if (c.history.length === 0) return;
+  if (typeof Chart === "undefined") {
+    setText("chart-summary", "圖表元件載入失敗。" + chartSummary(c));
+    return;
+  }
+  chart = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: `${c.code} 現金賣出`,
+          data: rates,
+          borderColor: COLORS.rate,
+          backgroundColor: COLORS.rate,
+          borderWidth: 2,
+          pointRadius: 0,
+          pointHitRadius: 8,
+          tension: 0.2,
+        },
+        {
+          label: `目標 ${c.target}`,
+          data: labels.map(() => target),
+          borderColor: COLORS.target,
+          borderWidth: 2,
+          borderDash: [6, 4],
+          pointRadius: 0,
+          pointHitRadius: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { color: COLORS.text, boxHeight: 2 } },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}：${Number(ctx.parsed.y).toFixed(4)}` } },
+      },
+      scales: {
+        x: {
+          // 軸上只顯示日期（"11/09"），完整時間在提示框裡，手機上才不會擠在一起
+          ticks: {
+            color: COLORS.text,
+            maxRotation: 0,
+            maxTicksLimit: window.innerWidth < 640 ? 4 : 7,
+            callback(value) { return this.getLabelForValue(value).split(" ")[0]; },
+          },
+          grid: { display: false },
+        },
+        y: {
+          ticks: { color: COLORS.text, callback: (v) => Number(v).toFixed(4) },
+          grid: { color: COLORS.grid },
+          // 讓目標線一定在圖裡看得到，就算匯率離目標很遠
+          suggestedMin: Math.min(target, ...rates),
+          suggestedMax: Math.max(target, ...rates),
+        },
+      },
+    },
+  });
+}
+
+function renderChart(data) {
+  const tabs = document.getElementById("chart-tabs");
+  const select = (code) => {
+    for (const b of tabs.children) b.setAttribute("aria-selected", String(b.dataset.code === code));
+    drawChart(data.currencies.find((c) => c.code === code));
+  };
+  tabs.replaceChildren(...data.currencies.map((c) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("role", "tab");
+    b.dataset.code = c.code;
+    b.textContent = c.code;
+    b.addEventListener("click", () => select(c.code));
+    return b;
+  }));
+  if (data.currencies.length) select(data.currencies[0].code);
+}
+
+// ---------- 到價通知紀錄 ----------
+
+function renderAlerts(data) {
+  const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+  document.getElementById("alerts-table").hidden = alerts.length === 0;
+  document.getElementById("alerts-empty").hidden = alerts.length > 0;
+  document.getElementById("alerts-body").replaceChildren(...alerts.map((a) => {
+    const tr = document.createElement("tr");
+    for (const text of [formatTime(a.sent_at), a.currency, a.rate, `≤ ${a.target}`]) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    return tr;
+  }));
+}
+
 function showError(message) {
   const el = document.getElementById("load-error");
   el.textContent = message;
@@ -120,6 +244,8 @@ async function main() {
   }
   renderHeader(data);
   renderCards(data);
+  renderChart(data);
+  renderAlerts(data);
 }
 
 main();

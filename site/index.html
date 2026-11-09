@@ -29,7 +29,27 @@
       </div>
     </section>
 
-    <!-- 步驟 4：走勢圖、到價通知紀錄 -->
+    <section class="panel" aria-labelledby="chart-title">
+      <div class="panel-head">
+        <h2 id="chart-title">近 30 天走勢</h2>
+        <div class="tabs" role="tablist" aria-label="選擇幣別" id="chart-tabs"></div>
+      </div>
+      <div class="chart-box">
+        <canvas id="chart" role="img" aria-label="匯率走勢圖"></canvas>
+      </div>
+      <p class="chart-summary" id="chart-summary"></p>
+    </section>
+
+    <section class="panel" aria-labelledby="alerts-title">
+      <h2 id="alerts-title">到價通知紀錄</h2>
+      <table class="alerts" id="alerts-table" hidden>
+        <thead>
+          <tr><th scope="col">時間</th><th scope="col">幣別</th><th scope="col">現金賣出</th><th scope="col">目標</th></tr>
+        </thead>
+        <tbody id="alerts-body"></tbody>
+      </table>
+      <p class="empty" id="alerts-empty" hidden>還沒有任何到價通知。</p>
+    </section>
   </main>
 
   <footer class="page-footer">
@@ -50,6 +70,7 @@
     </article>
   </template>
 
+  <script src="vendor/chart.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

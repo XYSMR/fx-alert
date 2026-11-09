@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "generated_at": "2026-11-09T16:12:00+08:00",
+  "last_check": null,
+  "quoted_at": null,
+  "source": {
+    "bank": "兆豐銀行",
+    "rate_type": "現金賣出",
+    "url": "https://www.megabank.com.tw/personal-banking/foreign-exchange/exchange-rate/exchange-rate"
+  },
+  "repo_url": "https://github.com/XYSMR/fx-alert",
+  "edit_config_url": "https://github.com/XYSMR/fx-alert/edit/main/config.yaml",
+  "currencies": [
+    {
+      "code": "JPY",
+      "name": "日圓",
+      "rate": null,
+      "rate_at": null,
+      "target": "0.205",
+      "buffer": "0.001",
+      "rearm_above": "0.206",
+      "distance_pct": null,
+      "status": "waiting",
+      "status_since": null,
+      "history": []
+    },
+    {
+      "code": "KRW",
+      "name": "韓元",
+      "rate": null,
+      "rate_at": null,
+      "target": "0.0250",
+      "buffer": "0.0002",
+      "rearm_above": "0.0252",
+      "distance_pct": null,
+      "status": "waiting",
+      "status_since": null,
+      "history": []
+    }
+  ],
+  "alerts": []
+}

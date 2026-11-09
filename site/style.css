@@ -1,0 +1,91 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1c2430;
+  --muted: #5b6676;
+  --border: #dde2e8;
+  --waiting: #2f5fb3;        /* 等待中：藍 */
+  --waiting-bg: #e8effa;
+  --triggered: #a14a00;      /* 已到價：橘（深色，文字對比夠） */
+  --triggered-bg: #fff0e0;
+  --error: #9b1c1c;
+  --error-bg: #fdecec;
+  --radius: 14px;
+  font-family: system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", "PingFang TC",
+    "Noto Sans TC", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0 auto;
+  max-width: 1040px;
+  padding: 24px 20px 40px;
+  line-height: 1.5;
+}
+
+h1 { font-size: 1.6rem; margin: 0; }
+h2 { font-size: 1.2rem; margin: 0 0 12px; }
+h3 { font-size: 1.15rem; margin: 0; }
+a { color: var(--waiting); }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+/* ---------- 頁頂 ---------- */
+.page-header {
+  display: flex; flex-wrap: wrap; gap: 12px 32px;
+  justify-content: space-between; align-items: end;
+  margin-bottom: 20px;
+}
+.subtitle { margin: 4px 0 0; color: var(--muted); }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; }
+.meta dt { font-size: .8rem; color: var(--muted); }
+.meta dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ok { color: #1d6b3a; }
+.bad { color: var(--error); }
+
+/* ---------- 提示 ---------- */
+.notice {
+  padding: 12px 16px; border-radius: var(--radius);
+  background: var(--error-bg); color: var(--error); margin: 0 0 16px;
+}
+
+/* ---------- 卡片 ---------- */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+}
+.card.is-triggered { border-color: var(--triggered); border-width: 2px; }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.card .name { color: var(--muted); font-weight: 400; }
+.badge {
+  font-size: .85rem; font-weight: 600; padding: 2px 10px; border-radius: 999px;
+  white-space: nowrap;
+}
+.badge.waiting { background: var(--waiting-bg); color: var(--waiting); }
+.badge.triggered { background: var(--triggered-bg); color: var(--triggered); }
+.card p { margin: 0; }
+.rate {
+  font-size: 2.6rem; font-weight: 700; letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums; margin: 10px 0 4px !important;
+}
+.target { color: var(--muted); }
+.distance { font-weight: 600; margin-top: 6px !important; }
+.distance.below { color: var(--triggered); }
+.since, .rearm { font-size: .85rem; color: var(--muted); margin-top: 6px !important; }
+.loading { color: var(--muted); }
+
+/* ---------- 頁尾 ---------- */
+.page-footer { margin-top: 32px; color: var(--muted); font-size: .85rem; }

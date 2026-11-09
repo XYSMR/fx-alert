@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FX Alert 匯率到價提醒</title>
+  <meta name="description" content="兆豐銀行日圓、韓元現金賣出價追蹤與到價提醒">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="page-header">
+    <div>
+      <h1>FX Alert 匯率到價提醒</h1>
+      <p class="subtitle" id="source">兆豐銀行・現金賣出</p>
+    </div>
+    <dl class="meta">
+      <div><dt>最後檢查</dt><dd id="last-check">—</dd></div>
+      <div><dt>牌告時間</dt><dd id="quoted-at">—</dd></div>
+    </dl>
+  </header>
+
+  <main>
+    <p class="notice" id="load-error" hidden></p>
+
+    <section aria-labelledby="cards-title">
+      <h2 id="cards-title" class="visually-hidden">各幣別目前狀況</h2>
+      <div class="cards" id="cards">
+        <p class="loading">載入中…</p>
+      </div>
+    </section>
+
+    <!-- 步驟 4：走勢圖、到價通知紀錄 -->
+  </main>
+
+  <footer class="page-footer">
+    <p>資料產生於 <span id="generated-at">—</span>・<a id="repo-link" href="https://github.com/XYSMR/fx-alert">原始碼</a></p>
+  </footer>
+
+  <template id="card-template">
+    <article class="card">
+      <header class="card-head">
+        <h3><span class="code"></span> <span class="name"></span></h3>
+        <span class="badge"></span>
+      </header>
+      <p class="rate"></p>
+      <p class="target"></p>
+      <p class="distance"></p>
+      <p class="since"></p>
+      <p class="rearm"></p>
+    </article>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>

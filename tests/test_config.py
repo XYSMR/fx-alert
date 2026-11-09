@@ -1,0 +1,113 @@
+from datetime import UTC, datetime, time, timedelta
+from decimal import Decimal as D
+from pathlib import Path
+
+import pytest
+
+from fx_alert.config import TAIPEI, ConfigFileError, load_config, parse_config
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def base(**over):
+    data = {
+        "state_file": "state.json",
+        "business_hours": {"weekdays_only": True, "start": "09:00", "end": "16:30"},
+        "currencies": {"JPY": {"target": "0.205", "buffer": "0.001"}},
+    }
+    data.update(over)
+    return data
+
+
+def test_repo_config_yaml_is_valid():
+    cfg = load_config(ROOT / "config.yaml")
+    codes = [r.currency for r in cfg.rules]
+    assert codes == ["JPY", "KRW"]
+    jpy = cfg.rules[0]
+    assert (jpy.target, jpy.buffer) == (D("0.205"), D("0.001"))
+    assert cfg.state_file == ROOT / "state.json"
+
+
+def test_yaml_floats_become_exact_decimals(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text("currencies:\n  JPY:\n    target: 0.205\n    buffer: 0.001\n", encoding="utf-8")
+    rule = load_config(p).rules[0]
+    assert rule.target == D("0.205") and rule.buffer == D("0.001")
+
+
+def test_lowercase_code_and_default_buffer():
+    cfg = parse_config(base(currencies={"jpy": {"target": "0.2"}}))
+    assert cfg.rules[0].currency == "JPY"
+    assert cfg.rules[0].buffer == D("0")
+
+
+@pytest.mark.parametrize(
+    ("data", "msg"),
+    [
+        ([], "最外層"),
+        (base(currencies={}), "至少"),
+        (base(currencies={"JPY": {}}), "target"),
+        (base(currencies={"JPY": {"target": "abc"}}), "不是合法的數字"),
+        (base(currencies={"JPY": {"target": True}}), "必須是數字"),
+        (base(currencies={"JPY": {"target": "0"}}), "大於 0"),
+        (base(currencies={"JPY": {"target": "0.2", "buffer": "-1"}}), "負數"),
+        (base(business_hours={"start": "9點"}), "HH:MM"),
+        (base(business_hours={"start": "17:00", "end": "09:00"}), "早於"),
+    ],
+)
+def test_invalid_config(data, msg):
+    with pytest.raises(ConfigFileError, match=msg):
+        parse_config(data)
+
+
+def test_invalid_yaml_file(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text("currencies: [unclosed", encoding="utf-8")
+    with pytest.raises(ConfigFileError, match="YAML"):
+        load_config(p)
+
+
+def test_missing_file(tmp_path):
+    with pytest.raises(ConfigFileError, match="讀不了"):
+        load_config(tmp_path / "nope.yaml")
+
+
+# ---------- 檢查時段（台灣時間） ----------
+
+HOURS = parse_config(base()).hours
+
+
+def tw(y, m, d, hh, mm):
+    return datetime(y, m, d, hh, mm, tzinfo=TAIPEI)
+
+
+@pytest.mark.parametrize(
+    ("when", "expected"),
+    [
+        (tw(2026, 11, 9, 9, 0), True),  # 週一 09:00（含）
+        (tw(2026, 11, 9, 16, 30), True),  # 16:30（含）
+        (tw(2026, 11, 9, 16, 31), False),
+        (tw(2026, 11, 9, 8, 59), False),
+        (tw(2026, 11, 13, 12, 0), True),  # 週五
+        (tw(2026, 11, 14, 12, 0), False),  # 週六
+        (tw(2026, 11, 15, 12, 0), False),  # 週日
+    ],
+)
+def test_business_hours(when, expected):
+    assert HOURS.contains(when) is expected
+
+
+def test_business_hours_converts_from_utc():
+    # GitHub Actions 的時間是 UTC：01:07 UTC = 台灣 09:07
+    assert HOURS.contains(datetime(2026, 11, 9, 1, 7, tzinfo=UTC))
+    assert not HOURS.contains(datetime(2026, 11, 9, 0, 59, tzinfo=UTC))
+
+
+def test_weekends_allowed_when_configured():
+    hours = parse_config(base(business_hours={"weekdays_only": False})).hours
+    assert hours.contains(tw(2026, 11, 14, 12, 0))
+    assert hours.start == time(9, 0)
+
+
+def test_taipei_is_utc_plus_8():
+    assert TAIPEI.utcoffset(None) == timedelta(hours=8)

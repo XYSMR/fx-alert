@@ -1,0 +1,21 @@
+# fx-alert 設定檔（不放任何機密；Email 帳密與收件人放在環境變數 / GitHub Secrets）
+
+# 狀態檔位置（GitHub Actions 會從 state 分支取出放在這裡）
+state_file: state.json
+
+# 只在這段時間檢查（台灣時間）。手動執行可加 --force 略過。
+business_hours:
+  weekdays_only: true
+  start: "09:00"
+  end: "16:30"
+
+# 追蹤的幣別：兆豐銀行「現金賣出」價 ≤ target 就通知；
+# 通知後要回升到 > target + buffer 才會重新上膛。
+# 數字建議加引號，避免被當成浮點數。
+currencies:
+  JPY:
+    target: "0.205"
+    buffer: "0.001"
+  KRW:
+    target: "0.0250"   # 暫定值，請改成你想要的目標價
+    buffer: "0.0002"

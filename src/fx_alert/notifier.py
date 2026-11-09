@@ -148,13 +148,14 @@ class SmtpNotifier:
 class DryRunNotifier:
     """不真的寄信，只印出來並記錄（本機 --dry-run 和測試用）。"""
 
-    def __init__(self, out=sys.stdout):
+    def __init__(self, out=None):
         self.sent: list[EmailMessage] = []
         self._out = out
 
     def send(self, msg: EmailMessage) -> None:
         self.sent.append(msg)
-        print(f"[dry-run] 不寄出：To={msg['To']} Subject={msg['Subject']}", file=self._out)
+        out = self._out or sys.stdout
+        print(f"[dry-run] 不寄出：To={msg['To']} Subject={msg['Subject']}", file=out)
 
 
 def _main(argv: list[str]) -> int:

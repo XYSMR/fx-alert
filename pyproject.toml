@@ -9,6 +9,7 @@ description = "台灣銀行牌告匯率到價 Email 提醒"
 requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

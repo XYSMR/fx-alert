@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- 網址裡有退訂用的簽章，不要透過 Referer 傳給別的網站 -->
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <title>取消到價通知｜FX Alert</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="page-header">
+    <h1>FX Alert 匯率到價提醒</h1>
+    <p class="subtitle">取消 Email 到價通知</p>
+  </header>
+
+  <main>
+    <section class="panel unsubscribe">
+      <form id="confirm">
+        <p>按下按鈕後，就不會再收到到價通知信。你的設定會保留，之後可以登入重新開啟。</p>
+        <button type="submit" id="confirm-button" class="primary">取消 Email 到價通知</button>
+      </form>
+      <div id="result" role="status" aria-live="polite" hidden>
+        <h2 id="result-title"></h2>
+        <p id="result-text"></p>
+      </div>
+      <p class="back"><a href="./">回到匯率首頁</a></p>
+    </section>
+  </main>
+
+  <script src="unsubscribe.js"></script>
+</body>
+</html>

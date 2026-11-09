@@ -43,6 +43,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+          # 有設定才會產生退訂連結（只放進信件，不會印在 log）
+          UNSUBSCRIBE_SECRET: ${{ secrets.STAGING_UNSUBSCRIBE_SECRET }}
         run: python -m fx_alert check --mode multi --dry-run --force
 
       # log 是公開的：再確認一次沒有任何 email 出現在這次產生的資料裡

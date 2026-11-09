@@ -26,6 +26,7 @@ from email.message import EmailMessage
 from typing import Protocol
 
 from fx_alert.rules import Rule
+from fx_alert.unsubscribe import UnsubscribeLinks
 
 BANK_LABEL = "兆豐銀行 現金賣出"
 RATE_PAGE = (
@@ -97,8 +98,12 @@ def build_alert_message(
     quoted_at: datetime | None,
     *,
     to: Sequence[str] | None = None,
+    unsubscribe: UnsubscribeLinks | None = None,
 ) -> EmailMessage:
-    """到價通知信。to 沒給就寄給 cfg.to（單人版的 MAIL_TO）。"""
+    """到價通知信。to 沒給就寄給 cfg.to（單人版的 MAIL_TO）。
+
+    unsubscribe：多人版才有。加上 List-Unsubscribe 標頭（RFC 8058 一鍵退訂）和內文的退訂連結。
+    """
     when = quoted_at.strftime("%Y-%m-%d %H:%M") if quoted_at else "（銀行未提供）"
     msg = EmailMessage()
     msg["Subject"] = f"[FX Alert] {rule.currency} 到價：{rate} ≤ 目標 {rule.target}"
@@ -119,9 +124,17 @@ def build_alert_message(
                 f"兆豐銀行牌告匯率：{RATE_PAGE}",
                 "",
                 "— fx-alert（GitHub Actions 自動寄出）",
+                *(
+                    ["", f"不想再收到到價通知？取消訂閱：{unsubscribe.page_url}"]
+                    if unsubscribe
+                    else []
+                ),
             ]
         )
     )
+    if unsubscribe:
+        msg["List-Unsubscribe"] = f"<{unsubscribe.one_click_url}>"
+        msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     return msg
 
 

@@ -421,3 +421,7 @@ enabled = true
 # formatted with uppercase keywords, indent 2, max width 180, trailing commas,
 # and column/key alignment. Set to "null" to emit raw, unformatted SQL.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":180,\"commaStyle\":\"trailing\"}"
+
+# fx-alert：一鍵退訂。Gmail 和沒登入的人也要能呼叫，所以不檢查 JWT；身分由 HMAC 簽章驗證。
+[functions.unsubscribe]
+verify_jwt = false

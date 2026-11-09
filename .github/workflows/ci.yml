@@ -1,4 +1,4 @@
-# CI：每次 push 到 main 或開 PR，都驗證 config.yaml、跑 lint 和測試（Python + 前端 + 資料庫 RLS）。
+# CI：每次 push 到 main 或開 PR，都驗證 config.yaml、跑 lint 和測試（Python + 前端 + Edge Functions + 資料庫 RLS）。
 name: ci
 
 on:
@@ -72,6 +72,24 @@ jobs:
       - name: Frontend unit tests
         # 只用 Node 內建的測試工具，不需要 npm install
         run: node --test site/tests/*.test.js
+
+  edge-functions:
+    name: edge functions (Deno)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Format, lint, type check
+        run: |
+          deno fmt --check --line-width 100 supabase/functions
+          deno lint supabase/functions
+          deno check supabase/functions/*/index.ts
+      - name: Test
+        # 和 Python 共用同一組 HMAC 測試向量（tests/test_unsubscribe.py）
+        run: deno test supabase/functions/
 
   db:
     name: db (schema + RLS)

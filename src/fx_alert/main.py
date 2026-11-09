@@ -56,6 +56,7 @@ from fx_alert.store import (
     SupabaseConfig,
     SupabaseStore,
 )
+from fx_alert.unsubscribe import UnsubscribeConfig, UnsubscribeError
 
 
 @dataclass
@@ -81,8 +82,12 @@ def run_check(
     force: bool = False,
     log: Callable[[str], None] = print,
     store: RuleStore | None = None,
+    unsubscribe: UnsubscribeConfig | None = None,
 ) -> CheckResult:
-    """store 沒給就用單人版的 FileStore（config.yaml + state.json，收件人 MAIL_TO）。"""
+    """store 沒給就用單人版的 FileStore（config.yaml + state.json，收件人 MAIL_TO）。
+
+    unsubscribe：多人版給；有 user_id 的規則，信裡會加上退訂連結和 List-Unsubscribe 標頭。
+    """
     result = CheckResult()
     local_now = now.astimezone(TAIPEI)
 
@@ -93,14 +98,16 @@ def run_check(
 
     store = store or FileStore(cfg, recipients=email_cfg.to)
     try:
-        _check_rates(cfg, store, notifier, email_cfg, local_now, fetch, result, log)
+        _check_rates(cfg, store, notifier, email_cfg, local_now, fetch, result, log, unsubscribe)
     finally:
         # 不論成功失敗都記錄這次檢查，頁面才看得出系統還活著
         write_last_check(cfg.data_dir, local_now, ok=not result.errors, errors=len(result.errors))
     return result
 
 
-def _check_rates(cfg, store, notifier, email_cfg, local_now, fetch, result, log) -> None:
+def _check_rates(
+    cfg, store, notifier, email_cfg, local_now, fetch, result, log, unsubscribe
+) -> None:
     try:
         watches = store.load_watches()
     except StoreError as exc:
@@ -149,7 +156,16 @@ def _check_rates(cfg, store, notifier, email_cfg, local_now, fetch, result, log)
                 if remaining <= 0:
                     result.deferred.append(w.label)  # 狀態不更新，下次再試
                     continue
-                msg = build_alert_message(email_cfg, rule, rate, board.quoted_at, to=w.recipients)
+                links = None
+                if unsubscribe and w.user_id:
+                    try:
+                        links = unsubscribe.links(w.user_id)
+                    except UnsubscribeError as exc:
+                        result.errors.append(f"{w.label} 無法產生退訂連結，這次不寄：{exc}")
+                        continue
+                msg = build_alert_message(
+                    email_cfg, rule, rate, board.quoted_at, to=w.recipients, unsubscribe=links
+                )
                 try:
                     notifier.send(msg)
                 except NotifyError as exc:
@@ -187,10 +203,12 @@ def _write_github_output(result: CheckResult) -> None:
 
 def _cmd_check(args) -> int:
     store: RuleStore | None = None
+    unsubscribe: UnsubscribeConfig | None = None
     try:
         cfg = load_config(args.config)
         if args.mode == "multi":
             store = SupabaseStore(SupabaseConfig.from_env())
+            unsubscribe = _unsubscribe_config(required=not args.dry_run)
             if args.dry_run:
                 store = ReadOnlyStore(store)
         if args.dry_run:
@@ -201,12 +219,18 @@ def _cmd_check(args) -> int:
         else:
             email_cfg = EmailConfig.from_env(require_to=args.mode == "single")
             notifier = SmtpNotifier(email_cfg)
-    except (ConfigFileError, ConfigError, StoreError) as exc:
+    except (ConfigFileError, ConfigError, StoreError, UnsubscribeError) as exc:
         print(f"設定錯誤：{exc}", file=sys.stderr)
         return 1
 
     result = run_check(
-        cfg, notifier, email_cfg, now=datetime.now(TAIPEI), force=args.force, store=store
+        cfg,
+        notifier,
+        email_cfg,
+        now=datetime.now(TAIPEI),
+        force=args.force,
+        store=store,
+        unsubscribe=unsubscribe,
     )
     for err in result.errors:
         print(f"錯誤：{redact_emails(err)}", file=sys.stderr)
@@ -214,6 +238,31 @@ def _cmd_check(args) -> int:
         print(f"::warning::今天已達寄信上限，延後 {len(result.deferred)} 封通知到下次排程")
     _write_github_output(result)
     return result.exit_code
+
+
+def _unsubscribe_config(*, required: bool) -> UnsubscribeConfig | None:
+    """多人版正式寄信一定要有退訂連結；dry-run 沒設定密鑰也可以跑。"""
+    if not required and not os.environ.get("UNSUBSCRIBE_SECRET", "").strip():
+        print("（沒有 UNSUBSCRIBE_SECRET：dry-run 不產生退訂連結）")
+        return None
+    return UnsubscribeConfig.from_env()
+
+
+def _cmd_unsubscribe_link(args) -> int:
+    """只在自己的電腦用：印出某個使用者的退訂連結（測試用，不要在 Actions 執行）。"""
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print("這個指令會印出退訂連結，不能在公開的 GitHub Actions log 裡執行", file=sys.stderr)
+        return 1
+    try:
+        links = UnsubscribeConfig.from_env().links(args.user_id)
+    except UnsubscribeError as exc:
+        print(f"設定錯誤：{exc}", file=sys.stderr)
+        return 1
+    print("確認頁（給人點）：")
+    print(f"  {links.page_url}")
+    print("一鍵退訂（信箱按鈕會 POST 到這裡）：")
+    print(f"  {links.one_click_url}")
+    return 0
 
 
 def _cmd_validate_config(args) -> int:
@@ -264,6 +313,10 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--dry-run", action="store_true", help="不真的寄信，只印出來")
     check.add_argument("--force", action="store_true", help="略過檢查時段限制")
     check.set_defaults(func=_cmd_check)
+
+    unsub = sub.add_parser("unsubscribe-link", help="（本機測試用）印出某個使用者的退訂連結")
+    unsub.add_argument("--user-id", required=True, help="Supabase 使用者的 UUID")
+    unsub.set_defaults(func=_cmd_unsubscribe_link)
 
     validate = sub.add_parser("validate-config", help="只驗證 config.yaml 格式")
     validate.add_argument("--config", type=Path, default=Path("config.yaml"))

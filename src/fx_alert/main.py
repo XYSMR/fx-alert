@@ -377,13 +377,16 @@ def _cmd_build_site(args) -> int:
     try:
         cfg = load_config(args.config)
         data_dir = args.data_dir or cfg.data_dir
-        data = build_data(cfg, data_dir, now=datetime.now(TAIPEI))
+        data = build_data(cfg, data_dir, now=datetime.now(TAIPEI), public=args.public)
     except (ConfigFileError, StateError) as exc:
         print(f"產生 data.json 失敗：{exc}", file=sys.stderr)
         return 1
     write_data_json(data, args.out)
     codes = ", ".join(f"{c['code']} {c['rate']}" for c in data["currencies"])
-    print(f"已產生 {args.out}（{codes}；通知紀錄 {len(data['alerts'])} 筆）")
+    if args.public:
+        print(f"已產生 {args.out}（公開版，不含目標價與通知紀錄；{codes}）")
+    else:
+        print(f"已產生 {args.out}（{codes}；通知紀錄 {len(data['alerts'])} 筆）")
     return 0
 
 
@@ -446,6 +449,11 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--config", type=Path, default=Path("config.yaml"))
     build.add_argument("--data-dir", type=Path, default=None, help="預設用 config 的 data_dir")
     build.add_argument("--out", type=Path, default=Path("site/data.json"))
+    build.add_argument(
+        "--public",
+        action="store_true",
+        help="多人版：只輸出公開行情（不含目標價、狀態、通知紀錄）",
+    )
     build.set_defaults(func=_cmd_build_site)
 
     args = ap.parse_args(argv)

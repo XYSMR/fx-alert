@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- 純文字頁面：不執行任何程式 -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'none'; style-src 'self'; base-uri 'self'; form-action 'none'">
+  <title>隱私說明｜FX Alert</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="page-header">
+    <h1>FX Alert 匯率到價提醒</h1>
+    <p class="subtitle">隱私說明</p>
+  </header>
+
+  <main>
+    <section class="panel privacy">
+      <h2>不用登入就能看的內容</h2>
+      <p>匯率走勢、最高價和最低價都是公開資料（來源：兆豐銀行牌告），不會記錄你是誰。</p>
+
+      <h2>登入後會存什麼</h2>
+      <ul>
+        <li><b>Email</b>：用 Google 登入時，Google 提供的 Email。只用來寄到價通知。</li>
+        <li><b>你的提醒設定</b>：幣別、目標價、進階設定（多回升多少才再提醒），以及每個提醒目前是「等待中」還是「已通知」。</li>
+        <li><b>通知紀錄</b>：寄出的時間、幣別、當時的匯率和目標價。</li>
+      </ul>
+      <p>不會存密碼（登入由 Google 處理），也不會存任何付款資料。</p>
+
+      <h2>誰看得到</h2>
+      <ul>
+        <li><b>你自己</b>：登入後只看得到自己的設定和通知紀錄。資料庫用 Row Level Security 限制，其他使用者讀不到你的資料。</li>
+        <li><b>網站維護者</b>：維護者管理資料庫，技術上看得到所有資料，只會用在處理問題和寄送通知。</li>
+        <li><b>服務提供者</b>：資料存放在 Supabase；登入經過 Google；通知信透過 Gmail 寄出。</li>
+      </ul>
+      <p>你的 Email 和目標價不會出現在公開的網頁、公開的程式碼或公開的執行紀錄（GitHub Actions log）裡，也不會提供給其他人。</p>
+
+      <h2>不想再收信、或想刪除資料</h2>
+      <ul>
+        <li><b>不想收信</b>：每封通知信都有「取消通知」連結，按一下就不會再寄；設定會保留，之後可以登入重新開啟。</li>
+        <li><b>刪除帳號</b>：登入後在「帳號」區塊刪除。你的 Email、提醒設定和通知紀錄會立刻一起刪除，無法復原。</li>
+      </ul>
+      <p>其他問題可以到 <a href="https://github.com/XYSMR/fx-alert/issues">GitHub Issues</a> 詢問（Issues 是公開的，請不要貼出自己的 Email）。</p>
+
+      <p class="back"><a href="./">回到匯率首頁</a></p>
+    </section>
+  </main>
+</body>
+</html>

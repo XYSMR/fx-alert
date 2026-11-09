@@ -48,3 +48,18 @@ def test_no_secrets_or_config_committed():
     assert not (SITE / "config.js").exists() or "config.js" in (
         SITE.parent / ".gitignore"
     ).read_text(encoding="utf-8")
+
+
+def test_privacy_page_is_static_and_linked_only_in_multi_user_mode():
+    page = (SITE / "privacy.html").read_text(encoding="utf-8")
+    assert "<script" not in page
+    assert "script-src 'none'" in page
+    assert not re.search(r"@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", page)  # 部署前的 email 檢查也會擋
+    # 首頁的連結預設隱藏，只有登入功能開啟時由 app.js 打開
+    tag = re.search(r'<[^>]*\sid="privacy-note"[^>]*>', INDEX)
+    assert tag and " hidden" in tag.group(0)
+    assert 'href="privacy.html"' in INDEX
+    app = (SITE / "app.js").read_text(encoding="utf-8")
+    unhide = '$("privacy-note").hidden = false;'
+    assert app.count(unhide) == 1
+    assert app.index(unhide) > app.index("if (plan.targetsFromDataJson)")

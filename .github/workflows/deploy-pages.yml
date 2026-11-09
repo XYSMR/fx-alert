@@ -61,15 +61,23 @@ jobs:
             mkdir -p data
           fi
 
+      # 登入功能開啟（多人版）時只輸出公開行情：目標價、狀態、通知紀錄都只在 Supabase
       - name: Build data.json
-        run: python -m fx_alert build-site --out site/data.json
+        env:
+          AUTH_ENABLED: ${{ vars.AUTH_ENABLED }}
+        run: |
+          if [ "${AUTH_ENABLED,,}" = "true" ]; then
+            python -m fx_alert build-site --out site/data.json --public
+          else
+            python -m fx_alert build-site --out site/data.json
+          fi
 
       # 只放頁面需要的檔案（不含 tests/、samples/）
       - name: Assemble site
         run: |
           mkdir _site
           cp -r site/index.html site/style.css site/app.js site/account.js site/vendor \
-            site/data.json site/unsubscribe.html site/unsubscribe.js _site/
+            site/data.json site/unsubscribe.html site/unsubscribe.js site/privacy.html _site/
           find _site -type f | sort
 
       # 登入功能開關（GitHub → Settings → Variables，不是 Secrets：這些值本來就公開）
@@ -95,6 +103,25 @@ jobs:
             exit 1
           fi
           echo "沒有發現 email、SMTP 字樣或 secret key"
+
+      # 多人版：公開的 data.json 不能有任何人的目標價、狀態或通知紀錄
+      - name: Check data.json is public-only
+        env:
+          AUTH_ENABLED: ${{ vars.AUTH_ENABLED }}
+        run: |
+          if [ "${AUTH_ENABLED,,}" != "true" ]; then
+            echo "登入功能關閉（單人版）：data.json 照舊包含 config.yaml 的目標價"
+            exit 0
+          fi
+          python - <<'PY'
+          import json, sys
+          from fx_alert.build_site import public_problems
+          problems = public_problems(json.load(open("_site/data.json", encoding="utf-8")))
+          if problems:
+              print("::error::公開的 data.json 含有個人設定：" + ", ".join(problems))
+              sys.exit(1)
+          print("data.json 只有公開行情")
+          PY
 
       - uses: actions/configure-pages@v5
 

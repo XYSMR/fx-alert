@@ -6,11 +6,12 @@
 
 check 每次執行：
   1. 不在檢查時段就直接結束（--force 可略過），什麼檔案都不寫
-  2. 讀狀態檔 → 抓兆豐匯率 → 解析 → 記錄走勢（同一份牌告只記一次）
+  2. 從 store 讀規則和狀態 → 抓兆豐匯率 → 解析 → 記錄走勢（同一份牌告只記一次）
+     （store 預設是 FileStore：config.yaml + state.json；多人版用 SupabaseStore）
   3. 每個幣別用狀態機判斷；要通知就寄信
      - 寄信成功 → 更新狀態、記一筆通知紀錄
      - 寄信失敗 → 狀態維持原樣（下次執行再試），本次結束碼為 1
-  4. 寫入 state.json（有變才寫）和 last_check.json（每次都寫）
+  4. 寫出狀態（有變才寫）和 last_check.json（每次都寫）
 
 結束碼：0 = 一切正常（含略過）；1 = 有任何錯誤（抓取、解析、寄信、設定）。
 """
@@ -27,7 +28,7 @@ from pathlib import Path
 
 from fx_alert.config import TAIPEI, AppConfig, ConfigFileError, load_config
 from fx_alert.fetcher import FetchError, fetch_rates_json
-from fx_alert.history import append_alert, append_quotes, write_last_check
+from fx_alert.history import append_quotes, write_last_check
 from fx_alert.notifier import (
     ConfigError,
     DryRunNotifier,
@@ -39,14 +40,7 @@ from fx_alert.notifier import (
 )
 from fx_alert.parser import ParseError, get_cash_sell, parse_rates
 from fx_alert.rules import decide
-from fx_alert.state_store import (
-    StateError,
-    current,
-    load_states,
-    save_states,
-    target_at_transition,
-    with_transition,
-)
+from fx_alert.store import FileStore, RuleStore, StoreError
 
 
 @dataclass
@@ -70,7 +64,9 @@ def run_check(
     fetch: Callable[[], str] | None = None,
     force: bool = False,
     log: Callable[[str], None] = print,
+    store: RuleStore | None = None,
 ) -> CheckResult:
+    """store 沒給就用單人版的 FileStore（config.yaml + state.json，收件人 MAIL_TO）。"""
     result = CheckResult()
     local_now = now.astimezone(TAIPEI)
 
@@ -79,20 +75,21 @@ def run_check(
         result.skipped = True
         return result
 
+    store = store or FileStore(cfg, recipients=email_cfg.to)
     try:
-        _check_rates(cfg, notifier, email_cfg, local_now, fetch, result, log)
+        _check_rates(cfg, store, notifier, email_cfg, local_now, fetch, result, log)
     finally:
         # 不論成功失敗都記錄這次檢查，頁面才看得出系統還活著
         write_last_check(cfg.data_dir, local_now, ok=not result.errors, errors=len(result.errors))
     return result
 
 
-def _check_rates(cfg, notifier, email_cfg, local_now, fetch, result, log) -> None:
+def _check_rates(cfg, store, notifier, email_cfg, local_now, fetch, result, log) -> None:
     try:
-        states = load_states(cfg.state_file)
-    except StateError as exc:
+        watches = store.load_watches()
+    except StoreError as exc:
         result.errors.append(str(exc))
-        return  # 狀態檔壞了就整個停下來，避免重複寄信
+        return  # 讀不到狀態就整個停下來，避免重複寄信
 
     try:
         board = parse_rates((fetch or fetch_rates_json)())
@@ -101,44 +98,51 @@ def _check_rates(cfg, notifier, email_cfg, local_now, fetch, result, log) -> Non
         return
 
     log(f"牌告時間：{board.quoted_at or '（未提供）'}")
+    # 走勢記錄 config 追蹤的幣別；規則用到的幣別也一併取價
+    codes = dict.fromkeys([r.currency for r in cfg.rules] + [w.rule.currency for w in watches])
     rates = {}
-    for rule in cfg.rules:
+    for code in codes:
         try:
-            rates[rule.currency] = get_cash_sell(board, rule.currency)
+            rates[code] = get_cash_sell(board, code)
         except ParseError as exc:
             result.errors.append(str(exc))  # 一個幣別出錯，不影響其他幣別
     if append_quotes(cfg.data_dir, board.quoted_at, rates):
         log("走勢：記錄了新的牌告")
 
-    new_states = states
-    for rule in cfg.rules:
+    for w in watches:
+        rule = w.rule
         if rule.currency not in rates:
             continue
         rate = rates[rule.currency]
-        prev = current(new_states, rule.currency)
-        decision = decide(rule, rate, prev, target_at_transition(new_states, rule.currency))
-        prev_label = prev.value if prev else "（無紀錄）"
+        decision = decide(rule, rate, w.state, w.state_target)
+        prev_label = w.state.value if w.state else "（無紀錄）"
         log(
-            f"{rule.currency}: 現金賣出 {rate}（目標 ≤ {rule.target}）"
+            f"{w.label}: 現金賣出 {rate}（目標 ≤ {rule.target}）"
             f" {prev_label} → {decision.next_state.value}：{decision.reason}"
         )
 
-        if decision.notify:
-            msg = build_alert_message(email_cfg, rule, rate, board.quoted_at)
-            try:
-                notifier.send(msg)
-            except NotifyError as exc:
-                result.errors.append(f"{rule.currency} 通知失敗，狀態不更新：{exc}")
-                continue
-            result.notified.append(rule.currency)
-            append_alert(cfg.data_dir, local_now, rule.currency, rate, rule.target)
+        try:
+            if decision.notify:
+                msg = build_alert_message(email_cfg, rule, rate, board.quoted_at, to=w.recipients)
+                try:
+                    notifier.send(msg)
+                except NotifyError as exc:
+                    result.errors.append(f"{w.label} 通知失敗，狀態不更新：{exc}")
+                    continue
+                result.notified.append(w.label)
+                store.record_alert(w, rate, local_now)
+            elif not store.record_transition(w, decision.next_state, rate, local_now):
+                log(f"{w.label}: 狀態在檢查期間被變更，這次不更新")
+        except StoreError as exc:
+            # 一條規則寫入失敗，不影響其他規則
+            result.errors.append(f"{w.label} 狀態寫入失敗：{exc}")
 
-        new_states = with_transition(
-            new_states, rule.currency, decision.next_state, rate, local_now, target=rule.target
-        )
-
-    result.state_changed = save_states(cfg.state_file, new_states)
-    log(f"狀態檔{'已更新' if result.state_changed else '沒有變化'}：{cfg.state_file}")
+    try:
+        result.state_changed = store.flush()
+    except StoreError as exc:
+        result.errors.append(f"狀態寫入失敗：{exc}")
+        return
+    log(f"狀態{'已更新' if result.state_changed else '沒有變化'}")
 
 
 def _write_github_output(result: CheckResult) -> None:

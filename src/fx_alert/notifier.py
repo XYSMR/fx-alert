@@ -17,7 +17,7 @@ import os
 import smtplib
 import ssl
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -76,14 +76,19 @@ class EmailConfig:
 
 
 def build_alert_message(
-    cfg: EmailConfig, rule: Rule, rate: Decimal, quoted_at: datetime | None
+    cfg: EmailConfig,
+    rule: Rule,
+    rate: Decimal,
+    quoted_at: datetime | None,
+    *,
+    to: Sequence[str] | None = None,
 ) -> EmailMessage:
-    """到價通知信。"""
+    """到價通知信。to 沒給就寄給 cfg.to（單人版的 MAIL_TO）。"""
     when = quoted_at.strftime("%Y-%m-%d %H:%M") if quoted_at else "（銀行未提供）"
     msg = EmailMessage()
     msg["Subject"] = f"[FX Alert] {rule.currency} 到價：{rate} ≤ 目標 {rule.target}"
     msg["From"] = cfg.user
-    msg["To"] = ", ".join(cfg.to)
+    msg["To"] = ", ".join(cfg.to if to is None else to)
     msg.set_content(
         "\n".join(
             [

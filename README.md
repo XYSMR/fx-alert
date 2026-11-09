@@ -112,6 +112,7 @@ src/fx_alert/
   parser.py       解析成 Decimal（缺值 = None）
   rules.py        到價狀態機（純函式）
   state_store.py  讀寫 state.json
+  store.py        規則與狀態的存放處：FileStore（單人版）／SupabaseStore（多人版）
   history.py      走勢、通知紀錄、最後檢查
   notifier.py     Gmail SMTP / dry-run
   config.py       讀取並驗證 config.yaml、檢查時段

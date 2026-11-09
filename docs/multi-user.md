@@ -46,7 +46,7 @@
 |---|---|---|
 | 1 | `feat/db-schema` | 資料表、欄位權限、RLS、trigger、CI 的本機 Supabase 測試 |
 | 2 | `feat/rule-store` | 狀態存取抽成介面：`FileStore`（現在）、`SupabaseStore`（新） |
-| 3 | `feat/multi-user-check` | `run_check` 跑每個人的規則；跳過 Email 關閉的人與停用的規則；每日寄信上限；`--mode single/multi` |
+| 3 | `feat/multi-user-check` | `--mode single/multi`；規則從 view `active_rules` 讀（排除 Email 關閉的人與停用的規則）；每日寄信上限 `email.daily_limit`；多人版 `--dry-run` 只讀；錯誤訊息遮蔽 email；手動的 `staging-check` workflow |
 | 4 | `feat/unsubscribe` | HMAC 簽章、Edge Function、確認頁、退訂 header；測試舊信連結仍有效、竄改的簽章被拒 |
 | 5 | `feat/frontend-auth` | 見下方 |
 | 6 | `feat/delete-account` | 刪除帳號 Edge Function（驗證使用者 JWT → 用 secret key 刪除）＋前端按鈕 |

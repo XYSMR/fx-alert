@@ -321,3 +321,72 @@ def test_cli_validate_config_fails(tmp_path, capsys):
     bad.write_text("currencies:\n  JPY:\n    target: '-1'\n", encoding="utf-8")
     assert main_mod.main(["validate-config", "--config", str(bad)]) == 1
     assert "驗證失敗" in capsys.readouterr().err
+
+
+# ---------- --mode ----------
+
+
+def test_cli_multi_mode_needs_supabase_env(monkeypatch, capsys):
+    for k in ("SUPABASE_URL", "SUPABASE_SECRET_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    code = main_mod.main(
+        ["check", "--mode", "multi", "--dry-run", "--config", str(ROOT / "config.yaml")]
+    )
+    assert code == 1
+    assert "SUPABASE_URL" in capsys.readouterr().err
+
+
+def test_cli_multi_mode_does_not_need_mail_to(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run_check(cfg, notifier, email_cfg, **kw):
+        seen.update(store=kw["store"], email_cfg=email_cfg)
+        return main_mod.CheckResult()
+
+    monkeypatch.setattr(main_mod, "run_check", fake_run_check)
+    monkeypatch.setenv("SUPABASE_URL", "https://abcd.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_TESTONLY")
+    monkeypatch.setenv("SMTP_USER", "sender@example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "x")
+    monkeypatch.delenv("MAIL_TO", raising=False)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    assert main_mod.main(["check", "--mode", "multi", "--config", str(ROOT / "config.yaml")]) == 0
+    assert type(seen["store"]).__name__ == "SupabaseStore"
+    assert seen["email_cfg"].to == ()
+
+
+def test_cli_multi_dry_run_is_read_only(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        main_mod,
+        "run_check",
+        lambda *a, **kw: seen.update(store=kw["store"]) or main_mod.CheckResult(),
+    )
+    monkeypatch.setenv("SUPABASE_URL", "https://abcd.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_TESTONLY")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    args = ["check", "--mode", "multi", "--dry-run", "--config", str(ROOT / "config.yaml")]
+    assert main_mod.main(args) == 0
+    assert type(seen["store"]).__name__ == "ReadOnlyStore"
+
+
+def test_cli_single_mode_is_default(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        main_mod,
+        "run_check",
+        lambda *a, **kw: seen.update(store=kw["store"]) or main_mod.CheckResult(),
+    )
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    assert main_mod.main(["check", "--dry-run", "--config", str(ROOT / "config.yaml")]) == 0
+    assert seen["store"] is None  # run_check 會用 FileStore
+
+
+def test_cli_prints_warning_when_deferred(monkeypatch, capsys):
+    monkeypatch.setattr(
+        main_mod, "run_check", lambda *a, **kw: main_mod.CheckResult(deferred=["JPY 規則#1"])
+    )
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    assert main_mod.main(["check", "--dry-run", "--config", str(ROOT / "config.yaml")]) == 0
+    assert "::warning::" in capsys.readouterr().out

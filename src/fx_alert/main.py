@@ -1,6 +1,6 @@
 """命令列入口。
 
-    python -m fx_alert check [--dry-run] [--force] [--config PATH]
+    python -m fx_alert check [--mode single|multi] [--dry-run] [--force] [--config PATH]
     python -m fx_alert validate-config [--config PATH]
     python -m fx_alert build-site [--config PATH] [--data-dir DIR] [--out site/data.json]
 
@@ -13,7 +13,14 @@ check 每次執行：
      - 寄信失敗 → 狀態維持原樣（下次執行再試），本次結束碼為 1
   4. 寫出狀態（有變才寫）和 last_check.json（每次都寫）
 
-結束碼：0 = 一切正常（含略過）；1 = 有任何錯誤（抓取、解析、寄信、設定）。
+--mode single（預設）：config.yaml + state.json，收件人 MAIL_TO。
+--mode multi：Supabase（SUPABASE_URL、SUPABASE_SECRET_KEY），每個人寄給自己；
+               搭配 --dry-run 時只讀不寫。
+
+每天寄信上限（config.yaml 的 email.daily_limit）：超過的通知這次不寄、狀態不更新，
+下次排程再試；這不算錯誤，但會在 log 和 Actions 顯示警告。
+
+結束碼：0 = 一切正常（含略過、延後）；1 = 有任何錯誤（抓取、解析、寄信、設定）。
 """
 
 from __future__ import annotations
@@ -37,10 +44,18 @@ from fx_alert.notifier import (
     NotifyError,
     SmtpNotifier,
     build_alert_message,
+    redact_emails,
 )
 from fx_alert.parser import ParseError, get_cash_sell, parse_rates
 from fx_alert.rules import decide
-from fx_alert.store import FileStore, RuleStore, StoreError
+from fx_alert.store import (
+    FileStore,
+    ReadOnlyStore,
+    RuleStore,
+    StoreError,
+    SupabaseConfig,
+    SupabaseStore,
+)
 
 
 @dataclass
@@ -48,6 +63,7 @@ class CheckResult:
     skipped: bool = False
     state_changed: bool = False
     notified: list[str] = field(default_factory=list)
+    deferred: list[str] = field(default_factory=list)  # 超過每日上限，延到下次
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -97,6 +113,13 @@ def _check_rates(cfg, store, notifier, email_cfg, local_now, fetch, result, log)
         result.errors.append(str(exc))
         return
 
+    day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        remaining = cfg.daily_limit - store.count_sent_since(day_start)
+    except StoreError as exc:
+        result.errors.append(f"查不到今天已寄出的數量，這次不寄信：{exc}")
+        return
+
     log(f"牌告時間：{board.quoted_at or '（未提供）'}")
     # 走勢記錄 config 追蹤的幣別；規則用到的幣別也一併取價
     codes = dict.fromkeys([r.currency for r in cfg.rules] + [w.rule.currency for w in watches])
@@ -123,12 +146,18 @@ def _check_rates(cfg, store, notifier, email_cfg, local_now, fetch, result, log)
 
         try:
             if decision.notify:
+                if remaining <= 0:
+                    result.deferred.append(w.label)  # 狀態不更新，下次再試
+                    continue
                 msg = build_alert_message(email_cfg, rule, rate, board.quoted_at, to=w.recipients)
                 try:
                     notifier.send(msg)
                 except NotifyError as exc:
-                    result.errors.append(f"{w.label} 通知失敗，狀態不更新：{exc}")
+                    result.errors.append(
+                        f"{w.label} 通知失敗，狀態不更新：{redact_emails(str(exc))}"
+                    )
                     continue
+                remaining -= 1
                 result.notified.append(w.label)
                 store.record_alert(w, rate, local_now)
             elif not store.record_transition(w, decision.next_state, rate, local_now):
@@ -136,6 +165,9 @@ def _check_rates(cfg, store, notifier, email_cfg, local_now, fetch, result, log)
         except StoreError as exc:
             # 一條規則寫入失敗，不影響其他規則
             result.errors.append(f"{w.label} 狀態寫入失敗：{exc}")
+
+    if result.deferred:
+        log(f"今天已達寄信上限 {cfg.daily_limit} 封，延後 {len(result.deferred)} 封到下次排程")
 
     try:
         result.state_changed = store.flush()
@@ -154,23 +186,32 @@ def _write_github_output(result: CheckResult) -> None:
 
 
 def _cmd_check(args) -> int:
+    store: RuleStore | None = None
     try:
         cfg = load_config(args.config)
+        if args.mode == "multi":
+            store = SupabaseStore(SupabaseConfig.from_env())
+            if args.dry_run:
+                store = ReadOnlyStore(store)
         if args.dry_run:
             email_cfg = EmailConfig(
                 user="dry-run@example.com", password="", to=("you@example.com",)
             )
             notifier: Notifier = DryRunNotifier()
         else:
-            email_cfg = EmailConfig.from_env()
+            email_cfg = EmailConfig.from_env(require_to=args.mode == "single")
             notifier = SmtpNotifier(email_cfg)
-    except (ConfigFileError, ConfigError) as exc:
+    except (ConfigFileError, ConfigError, StoreError) as exc:
         print(f"設定錯誤：{exc}", file=sys.stderr)
         return 1
 
-    result = run_check(cfg, notifier, email_cfg, now=datetime.now(TAIPEI), force=args.force)
+    result = run_check(
+        cfg, notifier, email_cfg, now=datetime.now(TAIPEI), force=args.force, store=store
+    )
     for err in result.errors:
-        print(f"錯誤：{err}", file=sys.stderr)
+        print(f"錯誤：{redact_emails(err)}", file=sys.stderr)
+    if result.deferred and os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::warning::今天已達寄信上限，延後 {len(result.deferred)} 封通知到下次排程")
     _write_github_output(result)
     return result.exit_code
 
@@ -184,6 +225,7 @@ def _cmd_validate_config(args) -> int:
     h = cfg.hours
     days = "平日" if h.weekdays_only else "每天"
     print(f"config.yaml 驗證通過：檢查時段 {days} {h.start:%H:%M}–{h.end:%H:%M}")
+    print(f"  每天最多寄 {cfg.daily_limit} 封到價通知")
     for r in cfg.rules:
         rearm = f"回升到 > {r.rearm_above} 重新上膛"
         print(f"  {r.currency}: 目標 ≤ {r.target}，buffer {r.buffer}（{rearm}）")
@@ -213,6 +255,12 @@ def main(argv: list[str] | None = None) -> int:
 
     check = sub.add_parser("check", help="檢查匯率並在到價時寄信")
     check.add_argument("--config", type=Path, default=Path("config.yaml"))
+    check.add_argument(
+        "--mode",
+        choices=("single", "multi"),
+        default="single",
+        help="single = config.yaml + MAIL_TO（預設）；multi = Supabase 多人版",
+    )
     check.add_argument("--dry-run", action="store_true", help="不真的寄信，只印出來")
     check.add_argument("--force", action="store_true", help="略過檢查時段限制")
     check.set_defaults(func=_cmd_check)

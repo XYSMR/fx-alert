@@ -178,3 +178,59 @@ def test_cli_reports_missing_config(monkeypatch, capsys):
         monkeypatch.delenv(k, raising=False)
     assert notifier._main(["--test"]) == 1
     assert "缺少環境變數" in capsys.readouterr().err
+
+
+# ---------- 多人版 ----------
+
+
+def test_multi_user_mode_does_not_need_mail_to():
+    cfg = EmailConfig.from_env({**ENV, "MAIL_TO": ""}, require_to=False)
+    assert cfg.to == ()
+    with pytest.raises(ConfigError, match="SMTP_PASSWORD"):
+        EmailConfig.from_env({**ENV, "SMTP_PASSWORD": ""}, require_to=False)
+
+
+def test_alert_message_to_override(cfg):
+    msg = build_alert_message(cfg, JPY, D("0.2049"), QUOTED, to=["alice@example.com"])
+    assert msg["To"] == "alice@example.com"
+
+
+def test_dry_run_output_hides_addresses(cfg):
+    out = io.StringIO()
+    DryRunNotifier(out=out).send(build_alert_message(cfg, JPY, D("0.2049"), QUOTED))
+    assert "@" not in out.getvalue()
+    assert "收件人 2 位" in out.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("{'alice@example.com': (550, b'no')}", "{'***': (550, b'no')}"),
+        ("a.b+c@mail.co.jp, x@y.org", "***, ***"),
+        ("沒有地址 500 error", "沒有地址 500 error"),
+    ],
+)
+def test_redact_emails(text, expected):
+    assert notifier.redact_emails(text) == expected
+
+
+def test_smtp_error_message_is_redacted(cfg):
+    class Refusing:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def login(self, *a):
+            pass
+
+        def send_message(self, msg):
+            raise smtplib.SMTPRecipientsRefused({"friend@example.com": (550, b"no such user")})
+
+    with pytest.raises(NotifyError) as exc_info:
+        SmtpNotifier(cfg, smtp_factory=Refusing).send(build_test_message(cfg))
+    assert "@" not in str(exc_info.value)

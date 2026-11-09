@@ -4,12 +4,15 @@
     record_alert(w, rate, now)     寄信成功後：狀態改成「已通知」＋寫一筆通知紀錄
     record_transition(w, s, ...)   沒寄信但狀態可能改變（例如回升後重新等待）
     flush()                        把累積的變更寫出去；回傳「狀態是否有變」
+    count_sent_since(t)            t 之後寄出了幾封通知（每日寄信上限用）
 
 兩種實作：
   * FileStore：單人版。規則來自 config.yaml，狀態在 state.json，通知紀錄在 alerts.csv，
     收件人來自 MAIL_TO。
   * SupabaseStore：多人版。用 secret key 呼叫 Supabase 的 REST API。
-    只讀出「規則啟用、而且 Email 通知開著」的規則；Email 關閉的人不判斷、不更新狀態。
+    規則從 view public.active_rules 讀，只有「規則啟用、而且 Email 通知開著」的規則；
+    Email 關閉的人不判斷、不更新狀態。
+  * ReadOnlyStore：包住另一個 store，只讀不寫（多人版的 --dry-run）。
 
 注意：GitHub Actions 的 log 在 public repo 是公開的。Watch.label 會出現在 log，
 所以只能放幣別和規則編號，不能放 email。
@@ -27,7 +30,7 @@ from typing import Protocol
 import requests
 
 from fx_alert.config import AppConfig
-from fx_alert.history import append_alert
+from fx_alert.history import append_alert, read_alerts
 from fx_alert.rules import AlertState, Rule
 from fx_alert.state_store import (
     StateError,
@@ -68,6 +71,8 @@ class RuleStore(Protocol):
         ...
 
     def flush(self) -> bool: ...
+
+    def count_sent_since(self, since: datetime) -> int: ...
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +126,9 @@ class FileStore:
             return False
         return save_states(self._cfg.state_file, self._states)
 
+    def count_sent_since(self, since: datetime) -> int:
+        return sum(1 for a in read_alerts(self._cfg.data_dir) if a.sent_at >= since)
+
 
 # ---------------------------------------------------------------------------
 # SupabaseStore：多人版
@@ -137,7 +145,7 @@ _RULE_COLUMNS = ",".join(
         "effective_buffer::text",
         "state",
         "state_target::text",
-        "profiles!inner(email,email_enabled)",
+        "email",
     ]
 )
 
@@ -189,21 +197,30 @@ class SupabaseStore:
     # ---- RuleStore ----
 
     def load_watches(self) -> list[Watch]:
-        resp = self._request(
-            "GET",
-            "alert_rules",
-            params={
-                "select": _RULE_COLUMNS,
-                "enabled": "is.true",
-                "profiles.email_enabled": "is.true",
-                "order": "id",
-            },
-        )
+        # active_rules 已經排除停用的規則和關閉 Email 的人（見 supabase/migrations）
+        resp = self._request("GET", "active_rules", params={"select": _RULE_COLUMNS, "order": "id"})
         try:
             rows = resp.json()
             return [_row_to_watch(row) for row in rows]
         except (ValueError, KeyError, TypeError, InvalidOperation) as exc:
             raise StoreError(f"Supabase 回傳的規則格式不對：{type(exc).__name__}") from exc
+
+    def count_sent_since(self, since: datetime) -> int:
+        resp = self._request(
+            "GET",
+            "notifications",
+            params={
+                "select": "id",
+                "sent_at": f"gte.{since.isoformat(timespec='seconds')}",
+                "limit": "1",
+            },
+            headers={"Prefer": "count=exact"},
+        )
+        # Content-Range 長得像 "0-0/12" 或 "*/0"
+        total = resp.headers.get("Content-Range", "").rpartition("/")[2]
+        if not total.isdigit():
+            raise StoreError("Supabase 沒有回傳通知數量")
+        return int(total)
 
     def record_alert(self, watch: Watch, rate: Decimal, now: datetime) -> None:
         # 改狀態＋寫通知紀錄在資料庫的同一個交易裡完成（public.record_alert）
@@ -246,6 +263,33 @@ class SupabaseStore:
         return self._changed  # 每次都已直接寫入，這裡只回報有沒有變更
 
 
+class ReadOnlyStore:
+    """只讀不寫：判斷照常，但狀態和通知紀錄都不寫入（多人版 --dry-run 用）。"""
+
+    def __init__(self, inner: RuleStore, log=print):
+        self._inner = inner
+        self._log = log
+
+    def load_watches(self) -> list[Watch]:
+        return self._inner.load_watches()
+
+    def count_sent_since(self, since: datetime) -> int:
+        return self._inner.count_sent_since(since)
+
+    def record_alert(self, watch: Watch, rate: Decimal, now: datetime) -> None:
+        self._log(f"[dry-run] {watch.label}: 不寫入「已通知」")
+
+    def record_transition(
+        self, watch: Watch, new_state: AlertState, rate: Decimal, now: datetime
+    ) -> bool:
+        if new_state is not (watch.state or AlertState.ARMED):
+            self._log(f"[dry-run] {watch.label}: 不寫入 {new_state.value}")
+        return True
+
+    def flush(self) -> bool:
+        return False
+
+
 def _row_to_watch(row: dict) -> Watch:
     currency = row["currency"]
     rule = Rule(currency, target=Decimal(row["target"]), buffer=Decimal(row["effective_buffer"]))
@@ -256,7 +300,7 @@ def _row_to_watch(row: dict) -> Watch:
         rule=rule,
         state=AlertState(row["state"]),
         state_target=None if state_target is None else Decimal(state_target),
-        recipients=(row["profiles"]["email"],),
+        recipients=(row["email"],),
     )
 
 

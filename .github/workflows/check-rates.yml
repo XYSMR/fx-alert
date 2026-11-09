@@ -1,0 +1,96 @@
+# 定時檢查匯率，到價就寄信；狀態存在獨立的 state 分支。
+name: check-rates
+
+on:
+  schedule:
+    # cron 用 UTC。台灣 = UTC+8，所以下面是台灣平日 09:07 ~ 16:07，每 30 分鐘一次。
+    # 避開整點（GitHub 整點最塞），程式裡另有 09:00–16:30 的時段檢查。
+    - cron: "7,37 1-7 * * 1-5"
+    - cron: "7 8 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "略過檢查時段限制（--force）"
+        type: boolean
+        default: true
+      dry_run:
+        description: "不真的寄信，只印出來（--dry-run）"
+        type: boolean
+        default: false
+
+# 同一時間只能有一個在跑，避免兩次執行同時改 state 分支
+concurrency:
+  group: check-rates
+  cancel-in-progress: false
+
+permissions:
+  contents: write # 需要 push 到 state 分支
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: python -m pip install .
+
+      - name: Load state from state branch
+        run: |
+          if git ls-remote --exit-code --heads origin state >/dev/null; then
+            git fetch --depth=1 origin state:refs/remotes/origin/state
+            git show origin/state:state.json > state.json
+            echo "已載入 state.json："
+            cat state.json
+          else
+            echo "還沒有 state 分支：第一次執行，所有幣別視為待命"
+          fi
+
+      - name: Check rates
+        id: check
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          FORCE: ${{ inputs.force && '--force' || '' }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          # 就算有錯誤也先別讓 job 失敗：有些幣別可能已經寄出通知，狀態一定要先存起來
+          set +e
+          python -m fx_alert check $FORCE $DRY_RUN
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Commit state to state branch
+        if: steps.check.outputs.state_changed == 'true' && !inputs.dry_run
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin state >/dev/null; then
+            git fetch --depth=1 origin state:refs/remotes/origin/state
+            git worktree add ../state-wt origin/state
+            cd ../state-wt
+            git switch -c state
+          else
+            git worktree add --detach ../state-wt
+            cd ../state-wt
+            git switch --orphan state
+          fi
+          cp "$GITHUB_WORKSPACE/state.json" state.json
+          git add state.json
+          git commit -m "state: $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M') 台灣時間"
+          git push origin state
+
+      - name: Fail if check reported errors
+        if: steps.check.outputs.exit_code != '0'
+        run: |
+          echo "::error::fx_alert check 回報錯誤（結束碼 ${{ steps.check.outputs.exit_code }}），請看上面 Check rates 的輸出"
+          exit 1

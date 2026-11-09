@@ -14,7 +14,8 @@
   "business_hours": {
     "weekdays_only": true,
     "start": "09:00",
-    "end": "16:30"
+    "end": "16:30",
+    "first_check": "09:07"
   },
   "currencies": [
     {
@@ -28,6 +29,8 @@
       "distance_pct": null,
       "status": "waiting",
       "status_since": null,
+      "high": null,
+      "low": null,
       "history": []
     },
     {
@@ -41,6 +44,8 @@
       "distance_pct": null,
       "status": "waiting",
       "status_since": null,
+      "high": null,
+      "low": null,
       "history": []
     }
   ],

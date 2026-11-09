@@ -89,8 +89,16 @@ python -m fx_alert build-site              # 產生 site/data.json
 python -m http.server 8000 -d site         # 開 http://localhost:8000/
 ```
 
-前端也可以用範例資料預覽：`http://localhost:8000/?data=samples/triggered.json`
-（另有 `waiting`、`empty`、`error`；範例中的走勢是假資料）。
+前端也可以用範例資料預覽（範例中的走勢是假資料，用 `python scripts/make_samples.py` 重新產生）：
+
+| 網址參數 | 情境 |
+|---|---|
+| `?data=samples/waiting.json` | 兩個幣別都在等待中 |
+| `?data=samples/triggered.json` | 日圓已低於目標、已寄通知 |
+| `?data=samples/rebound.json` | 日圓已通知過，但回升到目標和回升門檻之間 |
+| `?data=samples/empty.json` | 還沒有任何資料 |
+| `?data=samples/error.json` | 最後一次檢查失敗 |
+| 加上 `&now=2026-11-14T12:00` | 把「現在」設成指定的台灣時間（例如週末，看「非檢查時段」的狀態列） |
 
 > Windows 若出現「應用程式控制原則已封鎖此檔案」，把 `pytest`、`ruff` 改成 `python -m pytest`、`python -m ruff`。
 
@@ -105,12 +113,12 @@ src/fx_alert/
   history.py      走勢、通知紀錄、最後檢查
   notifier.py     Gmail SMTP / dry-run
   config.py       讀取並驗證 config.yaml、檢查時段
-  build_site.py   產生前端用的 data.json
+  build_site.py   產生前端用的 data.json（含距離目標 %、30 天最高最低）
   main.py         CLI：check / validate-config / build-site
 site/
   index.html  style.css  app.js     儀表板（純 HTML/JS，無建置步驟）
   vendor/chart.umd.min.js           Chart.js 4.6.1（MIT）
-  samples/                          本機預覽用的範例資料（不部署）
+  samples/                          本機預覽用的範例資料（不部署；scripts/make_samples.py 產生）
   tests/app.test.js                 前端單元測試（不部署）
 .github/workflows/
   ci.yml  check-rates.yml  deploy-pages.yml

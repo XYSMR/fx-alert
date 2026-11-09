@@ -54,15 +54,22 @@ def seed(cfg):
 @pytest.mark.parametrize(
     ("rate", "target", "expected"),
     [
-        ("0.2120", "0.205", 3.41),  # 還要跌 3.41%
+        # 除以「現價」：從現在的價格還要再跌多少
+        ("0.2120", "0.205", 3.302),  # (0.2120-0.205)/0.2120 = 3.3019%
+        ("0.2119", "0.205", 3.256),
         ("0.2050", "0.205", 0.0),
         ("0.2040", "0.205", -0.49),  # 已低於目標
-        ("0.0263", "0.0250", 5.2),
-        ("0.02503", "0.0250", 0.12),  # 0.12 四捨五入
+        ("0.0263", "0.0250", 4.943),
+        ("0.2051", "0.205", 0.049),  # 不到 0.1%：前端要能分辨，所以保留 3 位
     ],
 )
 def test_distance_pct(rate, target, expected):
     assert distance_pct(D(rate), D(target)) == expected
+
+
+def test_distance_pct_divides_by_current_rate_not_target():
+    # 現價 0.2119、目標 0.205：除以現價是 3.256%，除以目標會是 3.366%
+    assert distance_pct(D("0.2119"), D("0.205")) != 3.366
 
 
 # ---------- 整份 data.json ----------
@@ -80,7 +87,12 @@ def test_build_data_full(cfg):
     assert (
         data["actions_url"] == "https://github.com/XYSMR/fx-alert/actions/workflows/check-rates.yml"
     )
-    assert data["business_hours"] == {"weekdays_only": True, "start": "09:00", "end": "16:30"}
+    assert data["business_hours"] == {
+        "weekdays_only": True,
+        "start": "09:00",
+        "end": "16:30",
+        "first_check": "09:07",
+    }
 
     jpy, krw = data["currencies"]
     assert jpy == {
@@ -91,15 +103,17 @@ def test_build_data_full(cfg):
         "target": "0.205",
         "buffer": "0.001",
         "rearm_above": "0.206",
-        "distance_pct": -0.05,
+        "distance_pct": -0.049,
         "status": "triggered",
         "status_since": "2026-11-09T16:12:10+08:00",
+        "high": {"rate": "0.2150", "at": "2026-10-20T09:05:00+08:00"},
+        "low": {"rate": "0.2049", "at": "2026-11-09T16:10:12+08:00"},
         "history": [
             ["2026-10-20T09:05:00+08:00", "0.2150"],
             ["2026-11-09T16:10:12+08:00", "0.2049"],
         ],
     }
-    assert krw["status"] == "waiting" and krw["distance_pct"] == 5.2
+    assert krw["status"] == "waiting" and krw["distance_pct"] == 4.943
     assert len(krw["history"]) == 2  # 10/01 超過 30 天，被排除
 
     assert data["alerts"] == [
@@ -127,7 +141,7 @@ def test_target_comes_from_current_config_not_state(cfg):
 
     lowered = replace(cfg, rules=(Rule("JPY", D("0.203"), D("0.001")), cfg.rules[1]))
     jpy = build_data(lowered, cfg.data_dir, now=NOW)["currencies"][0]
-    assert jpy["target"] == "0.203" and jpy["distance_pct"] == 0.94
+    assert jpy["target"] == "0.203" and jpy["distance_pct"] == 0.927
 
 
 def test_empty_data_dir_first_deploy(cfg):
@@ -135,6 +149,7 @@ def test_empty_data_dir_first_deploy(cfg):
     assert data["last_check"] is None and data["quoted_at"] is None and data["alerts"] == []
     for c in data["currencies"]:
         assert c["rate"] is None and c["distance_pct"] is None
+        assert c["high"] is None and c["low"] is None
         assert c["status"] == "waiting" and c["history"] == []
 
 
@@ -204,3 +219,37 @@ def test_cli_build_site_with_corrupt_state(cfg, tmp_path, capsys):
     assert main_mod.main(["build-site", "--config", str(conf), "--out", str(out)]) == 1
     assert not out.exists()
     assert "失敗" in capsys.readouterr().err
+
+
+# ---------- 30 天最高／最低 ----------
+
+
+def test_high_low_takes_earliest_when_tied(cfg):
+    d = cfg.data_dir
+    for day, jpy in [(1, "0.2100"), (2, "0.2150"), (3, "0.2150"), (4, "0.2080"), (5, "0.2080")]:
+        append_quotes(d, datetime(2026, 11, day, 9, 5), {"JPY": D(jpy)})
+    jpy = build_data(cfg, d, now=NOW)["currencies"][0]
+    assert jpy["high"] == {"rate": "0.2150", "at": "2026-11-02T09:05:00+08:00"}
+    assert jpy["low"] == {"rate": "0.2080", "at": "2026-11-04T09:05:00+08:00"}
+
+
+def test_high_low_ignore_quotes_older_than_30_days(cfg):
+    d = cfg.data_dir
+    append_quotes(d, datetime(2026, 9, 1, 9, 5), {"JPY": D("0.3000")})
+    append_quotes(d, datetime(2026, 11, 2, 9, 5), {"JPY": D("0.2100")})
+    jpy = build_data(cfg, d, now=NOW)["currencies"][0]
+    assert jpy["high"]["rate"] == "0.2100"
+
+
+# ---------- 排程時間要和 workflow 的 cron 一致 ----------
+
+
+def test_first_check_matches_workflow_cron():
+    from pathlib import Path
+
+    from fx_alert.build_site import SCHEDULE_OFFSET_MINUTES
+
+    wf = (Path(__file__).resolve().parents[1] / ".github/workflows/check-rates.yml").read_text(
+        encoding="utf-8"
+    )
+    assert f'cron: "{SCHEDULE_OFFSET_MINUTES},{SCHEDULE_OFFSET_MINUTES + 30} 1-7 * * 1-5"' in wf

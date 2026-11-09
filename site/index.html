@@ -4,56 +4,70 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FX Alert 匯率到價提醒</title>
-  <meta name="description" content="兆豐銀行日圓、韓元現金賣出價追蹤與到價提醒">
+  <meta name="description" content="兆豐銀行日圓、韓元買外幣現鈔價格追蹤與到價提醒">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="page-header">
-    <div>
-      <h1>FX Alert 匯率到價提醒</h1>
-      <p class="subtitle" id="source">兆豐銀行・現金賣出</p>
-    </div>
-    <dl class="meta">
-      <div><dt>最後檢查</dt><dd id="last-check">—</dd></div>
-      <div><dt>牌告時間</dt><dd id="quoted-at">—</dd></div>
-    </dl>
+    <h1>FX Alert 匯率到價提醒</h1>
+    <p class="subtitle">兆豐銀行・買外幣現鈔的價格</p>
+    <p class="status idle" id="status" role="status">載入中…</p>
   </header>
 
   <main>
-    <p class="notice" id="load-error" hidden></p>
-    <p class="notice warn" id="status-banner" role="status" hidden></p>
-
     <section aria-labelledby="cards-title">
       <h2 id="cards-title" class="visually-hidden">各幣別目前狀況</h2>
-      <div class="cards" id="cards">
-        <p class="loading">載入中…</p>
+      <div class="cards" id="cards"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="conv-title">
+      <div class="panel-head">
+        <h2 id="conv-title">換匯試算</h2>
+        <div class="tabs" role="tablist" aria-label="試算幣別" id="conv-tabs"></div>
       </div>
+      <label class="amount" for="twd">
+        <span>我要換</span>
+        <input id="twd" type="text" inputmode="decimal" autocomplete="off" aria-describedby="conv-note">
+        <span>台幣</span>
+      </label>
+      <div aria-live="polite">
+        <p class="empty" id="conv-error" hidden></p>
+        <div id="conv-result">
+          <dl class="conv">
+            <div><dt>現在換</dt><dd><b id="conv-now"></b> <span class="sub" id="conv-now-rate"></span></dd></div>
+            <div><dt>等到目標價</dt><dd><b id="conv-target"></b> <span class="sub" id="conv-target-rate"></span></dd></div>
+          </dl>
+          <p class="verdict" id="conv-verdict"></p>
+        </div>
+      </div>
+      <p class="hint" id="conv-note">※ 僅供參考。實際金額依銀行鈔票面額與手續費而定。</p>
     </section>
 
     <section class="panel" aria-labelledby="chart-title">
       <div class="panel-head">
         <h2 id="chart-title">近 30 天走勢</h2>
-        <div class="tabs" role="tablist" aria-label="選擇幣別" id="chart-tabs"></div>
+        <div class="tabs" role="tablist" aria-label="走勢幣別" id="chart-tabs"></div>
       </div>
-      <div class="chart-box">
+      <div class="chart-box" id="chart-box">
         <canvas id="chart" role="img" aria-label="匯率走勢圖"></canvas>
       </div>
-      <p class="chart-summary" id="chart-summary"></p>
+      <ul class="marks" id="chart-marks"></ul>
+      <p class="empty" id="chart-summary"></p>
     </section>
 
     <section class="panel" aria-labelledby="alerts-title">
       <h2 id="alerts-title">到價通知紀錄</h2>
       <table class="alerts" id="alerts-table" hidden>
         <thead>
-          <tr><th scope="col">時間</th><th scope="col">幣別</th><th scope="col">現金賣出</th><th scope="col">目標</th></tr>
+          <tr><th scope="col">時間</th><th scope="col">幣別</th><th scope="col">匯率</th><th scope="col">你的目標</th></tr>
         </thead>
         <tbody id="alerts-body"></tbody>
       </table>
       <p class="empty" id="alerts-empty" hidden>還沒有任何到價通知。</p>
     </section>
+
     <section class="panel edit" aria-labelledby="edit-title">
-      <h2 id="edit-title">修改目標價</h2>
-      <p>目標價和 buffer 設定在 repo 的 <code>config.yaml</code>，在 GitHub 網頁上就能直接修改。</p>
+      <h2 id="edit-title">想改目標價？</h2>
       <a class="button" id="edit-link" href="https://github.com/XYSMR/fx-alert/edit/main/config.yaml"
          target="_blank" rel="noopener">✎ 在 GitHub 修改目標價</a>
       <p class="hint">頁面約 1 分鐘更新，到價判斷會在下一次排程檢查時套用新目標。</p>
@@ -61,22 +75,8 @@
   </main>
 
   <footer class="page-footer">
-    <p>資料產生於 <span id="generated-at">—</span>・<a id="repo-link" href="https://github.com/XYSMR/fx-alert">原始碼</a></p>
+    <p>資料產生於 <span id="generated-at">—</span><span id="preview-note"></span>・<a id="repo-link" href="https://github.com/XYSMR/fx-alert">原始碼</a></p>
   </footer>
-
-  <template id="card-template">
-    <article class="card">
-      <header class="card-head">
-        <h3><span class="code"></span> <span class="name"></span></h3>
-        <span class="badge"></span>
-      </header>
-      <p class="rate"></p>
-      <p class="target"></p>
-      <p class="distance"></p>
-      <p class="since"></p>
-      <p class="rearm"></p>
-    </article>
-  </template>
 
   <script src="vendor/chart.umd.min.js"></script>
   <script src="app.js"></script>

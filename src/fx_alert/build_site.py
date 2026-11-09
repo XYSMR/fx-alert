@@ -35,10 +35,32 @@ def _iso(dt: datetime) -> str:
     return dt.astimezone(TAIPEI).isoformat(timespec="seconds")
 
 
+# 排程在每個整點後第 7 分鐘開始（對應 check-rates.yml 的 cron "7,37 ..."），
+# 前端用來顯示「下次更新：週一 09:07」。tests/test_build_site.py 會檢查兩邊一致。
+SCHEDULE_OFFSET_MINUTES = 7
+
+
 def distance_pct(rate: Decimal, target: Decimal) -> float:
-    """(現價 − 目標) ÷ 目標 × 100，四捨五入到小數 2 位。正數 = 還要跌多少 %。"""
-    pct = (rate - target) / target * 100
-    return float(pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    """還要跌多少 %：(現價 − 目標) ÷ 現價 × 100。
+
+    除以「現價」，意思是「從現在的價格還要再跌多少」。保留小數 3 位，
+    讓前端能判斷「不到 0.1%」；顯示時再四捨五入到 1 位。負數 = 已低於目標。
+    """
+    pct = (rate - target) / rate * 100
+    return float(pct.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP))
+
+
+def _extreme(series: list, pick) -> dict[str, str] | None:
+    """30 天內的最高或最低價；同樣的價格出現多次時取最早的那一次。"""
+    if not series:
+        return None
+    best = pick(series, key=lambda q: q.cash_sell)
+    first = next(q for q in series if q.cash_sell == best.cash_sell)
+    return {"rate": str(first.cash_sell), "at": _iso(first.quoted_at)}
+
+
+def _add_minutes(t, minutes: int):
+    return (datetime.combine(datetime(2000, 1, 1), t) + timedelta(minutes=minutes)).time()
 
 
 def _repo() -> str:
@@ -75,6 +97,8 @@ def build_data(
                 "distance_pct": distance_pct(latest.cash_sell, rule.target) if latest else None,
                 "status": STATUS[entry.state] if entry else "waiting",
                 "status_since": entry.changed_at if entry else None,
+                "high": _extreme(series, max),
+                "low": _extreme(series, min),
                 "history": [[_iso(q.quoted_at), str(q.cash_sell)] for q in series],
             }
         )
@@ -103,6 +127,7 @@ def build_data(
             "weekdays_only": cfg.hours.weekdays_only,
             "start": f"{cfg.hours.start:%H:%M}",
             "end": f"{cfg.hours.end:%H:%M}",
+            "first_check": f"{_add_minutes(cfg.hours.start, SCHEDULE_OFFSET_MINUTES):%H:%M}",
         },
         "currencies": currencies,
         "alerts": alerts,

@@ -117,6 +117,7 @@ src/fx_alert/
   state_store.py  讀寫 state.json
   store.py        規則與狀態的存放處：FileStore（單人版）／SupabaseStore（多人版）
   unsubscribe.py  一鍵退訂的 HMAC 簽章與連結
+  migrate.py      單人版 → 多人版的搬家工具（migrate-me）
   history.py      走勢、通知紀錄、最後檢查
   notifier.py     Gmail SMTP / dry-run
   config.py       讀取並驗證 config.yaml、檢查時段

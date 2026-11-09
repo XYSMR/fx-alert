@@ -39,6 +39,7 @@ function setup(opts: { failDelete?: boolean } = {}) {
   const deleted: string[] = [];
   const valid = new Map<string, string>(); // token → user id
   const deps = {
+    configured: true,
     allowedOrigins: [SITE],
     getUser: (t: string) => Promise.resolve(valid.has(t) ? { id: valid.get(t)! } : null),
     deleteUser: (id: string): Promise<void> => {
@@ -170,4 +171,17 @@ Deno.test("lastSignInAt picks the latest amr timestamp", () => {
   );
   assertEquals(lastSignInAt({ amr: [{ method: "oauth" }] }), null);
   assertEquals(lastSignInAt(null), null);
+});
+
+Deno.test("keys missing (not configured) → 500 not_configured, nobody deleted", async () => {
+  const { deps, deleted, login } = setup();
+  const r = await call(post(login(60)), { ...deps, configured: false });
+  assertEquals([r.status, r.body], [500, { ok: false, error: "not_configured" }]);
+  assertEquals(deleted, []);
+});
+
+Deno.test("not configured still answers GET with 405 (smoke test order)", async () => {
+  const { deps } = setup();
+  const r = await call(new Request(FN), { ...deps, configured: false });
+  assertEquals(r.status, 405);
 });

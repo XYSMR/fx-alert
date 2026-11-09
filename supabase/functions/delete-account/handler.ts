@@ -12,6 +12,8 @@ export const CONFIRM_TEXT = "刪除我的帳號";
 export const MAX_AUTH_AGE_SECONDS = 10 * 60;
 
 export interface Deps {
+  /** 金鑰都讀得到（見 keys.ts）；false 時回 500 not_configured */
+  configured: boolean;
   allowedOrigins: string[];
   /** 用使用者的 token 問 Supabase Auth 這是誰；無效或過期回傳 null */
   getUser: (token: string) => Promise<{ id: string } | null>;
@@ -83,6 +85,9 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
       ...cors,
       Allow: "POST, OPTIONS",
     });
+  }
+  if (!deps.configured) {
+    return json(500, { ok: false, error: "not_configured" }, cors);
   }
 
   const auth = req.headers.get("Authorization") ?? "";

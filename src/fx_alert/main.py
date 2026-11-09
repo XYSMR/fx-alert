@@ -308,6 +308,37 @@ def _cmd_migrate_me(args) -> int:
     return 0
 
 
+def _cmd_export_state(args) -> int:
+    """退回方案：把資料庫裡自己的規則狀態、通知紀錄寫回 state.json、alerts.csv。"""
+    from fx_alert.export_state import describe_export, plan_export, write_export
+    from fx_alert.migrate import MigrationClient, MigrationError, mask_email
+
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print("export-state 會用到 email，不能在公開的 GitHub Actions log 裡執行", file=sys.stderr)
+        return 1
+    who = mask_email(args.email)
+    try:
+        cfg = load_config(args.config)
+        data_dir = args.data_dir or cfg.data_dir
+        client = MigrationClient(SupabaseConfig.from_env())  # secret key 只從環境變數讀
+        db = client.fetch(client.find_user(args.email))
+        plan = plan_export(db, cfg, data_dir)
+        print(f"從 {who} 的帳號匯出到 {data_dir}：")
+        print("\n".join(describe_export(plan)))
+        if args.dry_run:
+            print("（--dry-run：不寫入任何檔案）")
+            return 0
+        if not plan.has_changes:
+            print("✓ 檔案已經是最新的，不用寫入")
+            return 0
+        write_export(plan, data_dir)
+    except (ConfigFileError, StoreError, MigrationError) as exc:
+        print(f"匯出失敗：{exc}", file=sys.stderr)
+        return 1
+    print("✓ 已寫入。請在 state 分支的資料夾 git add / commit / push")
+    return 0
+
+
 def _cmd_site_config(args) -> int:
     from fx_alert.site_config import SiteConfigError, write_site_config
 
@@ -389,6 +420,17 @@ def main(argv: list[str] | None = None) -> int:
         help="帳號已有提醒時，連同通知紀錄一起覆蓋（同一個交易）",
     )
     mig.set_defaults(func=_cmd_migrate_me)
+
+    exp = sub.add_parser(
+        "export-state", help="（本機，退回方案用）把資料庫裡自己的狀態寫回 state.json、alerts.csv"
+    )
+    exp.add_argument("--email", required=True, help="你用來 Google 登入的 email")
+    exp.add_argument("--config", type=Path, default=Path("config.yaml"))
+    exp.add_argument(
+        "--data-dir", type=Path, default=None, help="state 分支的資料夾（有 state.json）"
+    )
+    exp.add_argument("--dry-run", action="store_true", help="只顯示要改什麼，不寫入檔案")
+    exp.set_defaults(func=_cmd_export_state)
 
     site_cfg = sub.add_parser(
         "site-config", help="產生前端的 config.js（讀 AUTH_ENABLED 等環境變數）"

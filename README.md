@@ -98,7 +98,9 @@ GitHub Actions 的 `schedule` 是「盡力而為」：官方文件寫明負載�
    ⚠ 這個網址等同密碼（知道的人可以假裝「一切正常」），**不要**寫進 repo、issue 或截圖。
 3. 到 Actions 手動跑一次 `check-rates`，healthchecks.io 的 check 應該變成綠色 **up**。
 
-`dry_run` 不會 ping；沒設定 `HEALTHCHECK_PING_URL` 時只會略過，不會讓排程失敗。
+只有**真的檢查了**才 ping 成功：如果排程延遲太久、在台灣時間 09:00–16:30 以外才執行，程式會略過檢查
+（workflow 仍是綠燈，log 會出現「不在檢查時段內，略過檢查；不通知監控」），這時**不 ping**，監控才會發現該跑的時段沒有檢查。
+`dry_run` 也不會 ping；沒設定 `HEALTHCHECK_PING_URL` 時只會略過，不會讓排程失敗。
 
 ### 收到 DOWN 通知時，照順序檢查
 

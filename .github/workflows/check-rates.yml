@@ -129,8 +129,14 @@ jobs:
       # 監控（healthchecks.io）：檢查成功就 ping，失敗就 ping /fail；一段時間沒收到 ping 會寄信通知。
       # ping 網址等同密碼（知道就能假裝「一切正常」），只放在 Secrets，不寫進 repo、不印出來。
       # 沒設定 HEALTHCHECK_PING_URL 時略過；ping 失敗不影響這次檢查的結果。
+      # 只有「真的檢查了」才算成功：時段外略過（例如延遲好幾小時才跑的排程）時 skipped=true，
+      # workflow 雖然是綠燈，但不 ping，監控才會發現該跑的時段沒有檢查。
+      - name: Note skipped run
+        if: ${{ steps.check.outputs.skipped == 'true' }}
+        run: echo "::notice::不在檢查時段內，略過檢查；不通知監控"
+
       - name: Ping monitor (success)
-        if: ${{ success() && !inputs.dry_run }}
+        if: ${{ success() && !inputs.dry_run && steps.check.outputs.skipped == 'false' }}
         env:
           HC_URL: ${{ secrets.HEALTHCHECK_PING_URL }}
         run: |

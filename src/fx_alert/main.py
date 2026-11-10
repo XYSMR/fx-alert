@@ -197,10 +197,18 @@ def _check_rates(
 
 
 def _write_github_output(result: CheckResult) -> None:
+    """給 workflow 用的輸出：
+
+    skipped        true = 不在檢查時段內，沒有抓匯率也沒有判斷（workflow 不會 ping 監控「成功」）
+    state_changed  true = 有狀態轉換
+
+    設定錯誤時不會走到這裡，所以不會有 skipped；workflow 只在 skipped=false 時 ping 成功。
+    """
     path = os.environ.get("GITHUB_OUTPUT")
     if not path:
         return
     with open(path, "a", encoding="utf-8") as f:
+        f.write(f"skipped={'true' if result.skipped else 'false'}\n")
         f.write(f"state_changed={'true' if result.state_changed else 'false'}\n")
 
 

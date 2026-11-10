@@ -50,3 +50,51 @@ def test_no_workflow_prints_secrets():
                 assert "SECRET_KEY" not in line.split("#")[0] or "::error::" in line, (
                     f"{path.name}: {line.strip()}"
                 )
+
+
+def test_check_rates_pings_monitor_from_secret_only():
+    wf = read("check-rates.yml")
+    assert wf.count("${{ secrets.HEALTHCHECK_PING_URL }}") == 2
+    assert "if: ${{ success() && !inputs.dry_run && steps.check.outputs.skipped == 'false' }}" in wf
+    assert "if: ${{ failure() && !inputs.dry_run }}" in wf
+    assert '"$HC_URL/fail"' in wf
+    # ping 放在最後：要等前面的檢查、commit、錯誤判斷都結束
+    assert wf.index("Fail if check reported errors") < wf.index("Ping monitor (success)")
+    for line in wf.splitlines():
+        if "echo" in line:
+            assert "HC_URL" not in line, line
+
+
+def test_no_monitoring_url_committed_anywhere():
+    """ping 網址等同密碼，repo 是公開的：任何檔案都不能有 hc-ping.com/<uuid>。"""
+    import re
+
+    root = WF.parents[1]
+    pattern = re.compile(r"hc-ping\.com/[0-9a-fA-F-]{20,}")
+    for path in root.rglob("*"):
+        if ".git" in path.parts or "node_modules" in path.parts or not path.is_file():
+            continue
+        if path.suffix not in {
+            ".py",
+            ".yml",
+            ".yaml",
+            ".md",
+            ".js",
+            ".html",
+            ".json",
+            ".toml",
+            ".ts",
+        }:
+            continue
+        assert not pattern.search(path.read_text(encoding="utf-8", errors="ignore")), path
+
+
+def test_skipped_runs_do_not_ping_success():
+    """時段外略過 → skipped=true → 不 ping 成功；沒有 skipped（設定錯誤）也不 ping 成功。"""
+    wf = read("check-rates.yml")
+    block = wf[
+        wf.index("- name: Ping monitor (success)") : wf.index("- name: Ping monitor (failure)")
+    ]
+    cond = next(line for line in block.splitlines() if line.strip().startswith("if:"))
+    assert "steps.check.outputs.skipped == 'false'" in cond  # 必須明確等於 false，空值不算
+    assert "skipped != 'true'" not in cond

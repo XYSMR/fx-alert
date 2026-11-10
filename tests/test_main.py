@@ -193,7 +193,7 @@ def test_cli_dry_run_end_to_end(tmp_path, monkeypatch, capsys):
     assert code == 0
     out = capsys.readouterr().out
     assert "[dry-run]" in out and "JPY 到價" in out
-    assert out_file.read_text(encoding="utf-8") == "state_changed=true\n"
+    assert out_file.read_text(encoding="utf-8") == "skipped=false\nstate_changed=true\n"
     assert load_states(tmp_path / "data" / "state.json")["JPY"].state is AlertState.TRIGGERED
 
 
@@ -424,3 +424,58 @@ def test_cli_prints_warning_when_deferred(monkeypatch, capsys):
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     assert main_mod.main(["check", "--dry-run", "--config", str(ROOT / "config.yaml")]) == 0
     assert "::warning::" in capsys.readouterr().out
+
+
+# ---------- GITHUB_OUTPUT 的 skipped（監控只在真的檢查時 ping 成功） ----------
+
+
+class _FrozenSaturday(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return SATURDAY.astimezone(tz) if tz else SATURDAY
+
+
+def _cli_check(tmp_path, monkeypatch, *extra):
+    (tmp_path / "config.yaml").write_text(
+        (ROOT / "config.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    out_file = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out_file))
+    for k in ("SMTP_USER", "SMTP_PASSWORD", "MAIL_TO"):
+        monkeypatch.delenv(k, raising=False)
+    code = main_mod.main(["check", "--dry-run", "--config", str(tmp_path / "config.yaml"), *extra])
+    text = out_file.read_text(encoding="utf-8") if out_file.exists() else ""
+    return code, dict(line.split("=", 1) for line in text.splitlines())
+
+
+def test_cli_outside_hours_reports_skipped(tmp_path, monkeypatch):
+    """例如延遲 10 小時、凌晨才跑的排程：略過檢查，workflow 是綠燈但 skipped=true。"""
+    monkeypatch.setattr(main_mod, "datetime", _FrozenSaturday)
+
+    def must_not_fetch():
+        raise AssertionError("時段外不應該抓匯率")
+
+    monkeypatch.setattr(main_mod, "fetch_rates_json", must_not_fetch)
+    code, out = _cli_check(tmp_path, monkeypatch)
+    assert code == 0
+    assert out == {"skipped": "true", "state_changed": "false"}
+
+
+def test_cli_force_outside_hours_is_not_skipped(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_mod, "datetime", _FrozenSaturday)
+    monkeypatch.setattr(main_mod, "fetch_rates_json", lambda: mega_json(jpy="0.2100"))
+    code, out = _cli_check(tmp_path, monkeypatch, "--force")
+    assert code == 0
+    assert out["skipped"] == "false"
+
+
+def test_cli_config_error_writes_no_skipped(tmp_path, monkeypatch, capsys):
+    """設定錯誤：沒有 skipped=false → workflow 不會 ping 成功（會走失敗的 ping）。"""
+    (tmp_path / "config.yaml").write_text("currencies: {XYZ: {target: '1'}}\n", encoding="utf-8")
+    out_file = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out_file))
+    code = main_mod.main(["check", "--dry-run", "--config", str(tmp_path / "config.yaml")])
+    assert code == 1
+    assert "skipped=false" not in (
+        out_file.read_text(encoding="utf-8") if out_file.exists() else ""
+    )

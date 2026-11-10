@@ -172,15 +172,16 @@ Vault 一律在後台頁面新增，**不要**用 SQL Editor 執行 `vault.creat
 
 改了 `config.yaml` 會觸發 CI（格式驗證）和重新部署網站；格式錯誤時排程不會檢查、網站也不會部署。
 
-### 金鑰到期與輪替
+### 金鑰到期
 
-| 金鑰 | 期限 | 輪替方式 |
+| 金鑰 | 放在哪裡 | 到期日 |
 |---|---|---|
-| `github_dispatch_token`（正式、staging 各一把） | 90 天 | 到期前建立新的 PAT → 更新 Vault → 下一個 :05 確認 pg_net 回 204 → 刪除舊的 PAT |
-| `SUPABASE_SECRET_KEY`、`FX_SECRET_KEY` | 不會到期 | 建立新 key → 更新 GitHub Secret／Edge Function Secret → 冒煙測試 → 刪除舊 key → 再測一次 |
-| `UNSUBSCRIBE_SECRET` | 不會到期 | GitHub、Edge Function 兩邊同時換成同一個新值；舊信的退訂連結會失效 |
+| `fx-alert-dispatch-prod`（GitHub fine-grained PAT） | 正式專案 Vault `github_dispatch_token` | **2027-02-08** |
+| `fx-alert-dispatch-staging`（GitHub fine-grained PAT） | staging Vault `github_dispatch_token` | **2027-02-08** |
+| Supabase secret key（`github_actions_2`、`edge_functions_2`） | GitHub Secret `SUPABASE_SECRET_KEY`、Edge Function Secret `FX_SECRET_KEY` | 不會到期 |
+| `UNSUBSCRIBE_SECRET` | GitHub Secret＋Edge Function Secret（同一個值） | 不會到期 |
 
-token 過期時 pg_net 會回 401：GitHub schedule 仍是備援但常延遲，healthchecks.io 會寄信提醒。
+更換步驟見〈[定期維護](#定期維護)〉。
 
 ## 資料存放
 
@@ -195,6 +196,58 @@ token 過期時 pg_net 會回 401：GitHub schedule 仍是備援但常延遲，h
 | 網站 `data.json` | 公開行情（不含任何人的目標價、狀態、通知紀錄） | 是 |
 
 commit 到 `state` 分支、部署 `data.json` 前都會自動掃描，確認沒有 Email 或個人設定。
+
+## 定期維護
+
+### 每年兩次左右：更換 pg_cron 用的 GitHub token（下次 **2027-02-08** 到期）
+
+**在 2027-02-01 前後（到期前一週）**換掉，正式、staging 各一把，步驟相同。token 過期時 pg_net 會回 401，
+只剩常延遲的 GitHub schedule 備援，healthchecks.io 會寄 DOWN 通知。
+
+1. 到 <https://github.com/settings/personal-access-tokens/new> 建立新的 fine-grained token：
+   - 名稱：`fx-alert-dispatch-prod`（staging 用 `fx-alert-dispatch-staging`）
+   - Expiration：**90 days**（記下新的到期日）
+   - Repository access：**Only select repositories → fx-alert**
+   - Permissions：只開 **Actions: Read and write**
+2. 該專案的 Supabase 後台 → **Integrations → Vault**，編輯 `github_dispatch_token`，貼上新 token 後儲存。
+   不要用 SQL Editor（查詢紀錄會留下 token）。
+3. 等下一個 :05 或 :35（平日台灣時間 09:05–16:05），在該專案的 SQL Editor 確認回 **204**：
+   ```sql
+   select to_char(created at time zone 'Asia/Taipei', 'MM-DD HH24:MI:SS') as 時間,
+          status_code, left(coalesce(error_msg, content::text, ''), 200) as 內容
+   from net._http_response order by created desc limit 3;
+   ```
+   正式專案再到 Actions → `check-rates`，確認同一分鐘有一筆 `workflow_dispatch`（source: pg_cron）。
+4. 確認 204 之後，回到 <https://github.com/settings/personal-access-tokens> **刪除舊的 token**。
+5. 更新這份 README〈[金鑰到期](#金鑰到期)〉表格裡的到期日。
+
+### 需要時：更換正式專案的 Supabase secret key
+
+secret key 不會到期，但只要曾經出現在畫面、剪貼簿、聊天紀錄或 log，就要換。
+GitHub 和 Edge Function **用的是兩把不同的 key**，兩把都要換；**先建新的、兩邊都更新、測試通過，最後才刪舊的**，
+過程中服務不會中斷。
+
+1. **建立新 key**：正式專案 → Project Settings → **API Keys** → Secret keys → **Add new secret key**，
+   建立兩把，例如 `github_actions_3`、`edge_functions_3`（舊的先不要刪）。
+2. **更新 GitHub**：Settings → Secrets and variables → Actions → `SUPABASE_SECRET_KEY` → 貼上 `github_actions_3`。
+3. **更新 Edge Function**：正式專案 → Edge Functions → **Secrets** → Name 手動輸入 `FX_SECRET_KEY`（結尾不能有空白）
+   → 貼上 `edge_functions_3` → Save（出現「Replace secret」就確認）。
+4. **測試新 key**：
+   - Actions → `check-rates` → Run workflow，勾 **dry_run**（不寄信、不寫入）：log 要讀到每條規則（例如「規則#1 … 尚未到價」），
+     沒有出現 Supabase 401。
+   - Edge Functions 的冒煙測試（步驟見 [`docs/multi-user.md`](docs/multi-user.md)「冒煙測試」）：
+     兩支 function 用 GET 回 405、delete-account 沒帶 token 回 401、退訂錯誤簽章回 403；
+     用 `unsubscribe-link` 產生不存在帳號的退訂連結並 POST，回 `{"ok":true,"status":"no_account"}`（這一項會用到 `FX_SECRET_KEY`）。
+5. **刪除舊 key**：API Keys 頁面刪除舊的兩把（確認名稱不是新的那兩把）。
+6. **再測一次**：重複第 4 步，確認已經沒有任何地方還在用舊 key。
+
+剪貼簿用完記得清空（PowerShell：`Set-Clipboard -Value " "`）。
+
+### 需要時：更換 `UNSUBSCRIBE_SECRET`
+
+GitHub Secret 和正式專案的 Edge Function Secret 要**同時**換成同一個新值（≥ 32 字元，例如
+`python -c "import secrets; print(secrets.token_urlsafe(32))"`）。換掉後，**已經寄出的信裡的退訂連結會失效**。
+換完跑一次第 4 步的退訂測試（回 `no_account`）。
 
 ## 排程沒有執行時怎麼排查
 
@@ -234,7 +287,7 @@ GitHub Actions 的 `schedule` 是「盡力而為」：官方文件寫明負載�
    | `status_code` | 意思 |
    |---|---|
    | **204** | GitHub 已接受觸發（問題在 GitHub 端，往下看） |
-   | 401 | token 錯誤或已過期 → 換新的 PAT（見〈金鑰到期與輪替〉） |
+   | 401 | token 錯誤或已過期 → 換新的 PAT（見〈[定期維護](#定期維護)〉） |
    | 403、404 | token 沒選到 fx-alert，或沒開 Actions 寫入 |
    | 422 | 送出的 inputs 和 workflow 對不上（migration 和 workflow 版本不一致） |
    | 空白＋錯誤訊息 | 網路問題或逾時 |

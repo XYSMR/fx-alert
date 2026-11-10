@@ -57,9 +57,15 @@ def test_secret_key_only_goes_in_apikey_header():
 
 
 def _dispatch_inputs() -> dict[str, dict]:
-    sql = (SUPABASE / "migrations/20261110020000_dispatch_check_rates.sql").read_text("utf-8")
-    pairs = re.findall(r"when '([\w.-]+\.yml)' then '(\{.*?\})'::jsonb", sql)
-    return {wf: json.loads(body) for wf, body in pairs}
+    """依 migration 順序，取最後一次定義的 private.dispatch_inputs（create or replace）。"""
+    latest: dict[str, dict] = {}
+    for path in sorted((SUPABASE / "migrations").glob("*.sql")):
+        sql = path.read_text("utf-8")
+        if "function private.dispatch_inputs" not in sql:
+            continue
+        pairs = re.findall(r"when '([\w.-]+\.yml)' then '(\{.*?\})'::jsonb", sql)
+        latest = {wf: json.loads(body) for wf, body in pairs}
+    return latest
 
 
 def _workflow_inputs(name: str) -> dict:
@@ -75,7 +81,12 @@ def test_pg_cron_dispatch_inputs_match_workflows():
     for workflow, inputs in sent.items():
         defined = _workflow_inputs(workflow)
         assert set(inputs) == set(defined), workflow  # 每個 input 都明確送，不靠預設值
-        assert all(v in ("true", "false") for v in inputs.values())
+        for name, value in inputs.items():
+            spec = defined[name]
+            if spec.get("type") == "choice":
+                assert value in spec["options"], (workflow, name)
+            else:
+                assert value in ("true", "false"), (workflow, name)
 
 
 def test_pg_cron_dispatch_never_forces():
@@ -92,3 +103,10 @@ def test_pg_cron_schedule_is_utc_with_taiwan_time_comments():
     assert "cron.schedule('fx-alert-dispatch-1605', '5 8 * * 1-5'" in sql
     assert "台灣平日 09:05、09:35" in sql and "15:05、15:35" in sql and "台灣平日 16:05" in sql
     assert "github_pat_" not in sql and "ghp_" not in sql  # token 只在 Vault
+
+
+def test_pg_cron_dispatch_marks_source():
+    """去重判斷靠 source=pg_cron 分辨自動觸發；手動執行的預設值是 manual。"""
+    assert _dispatch_inputs()["check-rates.yml"]["source"] == "pg_cron"
+    source = _workflow_inputs("check-rates.yml")["source"]
+    assert source["default"] == "manual" and "pg_cron" in source["options"]

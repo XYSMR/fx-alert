@@ -20,6 +20,11 @@ on:
         description: "不寄信、不寫入 Supabase，只印出來（--dry-run），也不 commit"
         type: boolean
         default: false
+      source:
+        description: "觸發來源：手動執行請保持 manual（pg_cron 是 Supabase 自動觸發用的）"
+        type: choice
+        options: [manual, pg_cron]
+        default: manual
 
 # 同一時間只能有一個在跑，避免兩次執行同時改 state 分支
 concurrency:
@@ -30,21 +35,58 @@ permissions:
   contents: write # 需要 push 到 state 分支
 
 jobs:
-  check:
+  # 去重：自動觸發有兩個來源（Supabase pg_cron 每 :05/:35 為主、GitHub schedule 每 :07/:37 備援）。
+  # 20 分鐘內已經成功檢查過就 run=false：check、deploy 都會被略過（不檢查、不 ping 監控、不部署），
+  # workflow 仍然是綠燈。手動執行一律檢查。判斷失敗時照常檢查（check 的條件是 run != 'false'）。
+  gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 2
+    permissions:
+      contents: read
     outputs:
-      config_ok: ${{ steps.validate.outputs.ok }}
+      run: ${{ steps.decide.outputs.run }}
     steps:
       # 排查用：記下這次是誰觸發的、預定的 cron、實際開始時間（GitHub 排程可能延遲或被丟掉）
       - name: Show trigger
         env:
           EVENT: ${{ github.event_name }}
           CRON: ${{ github.event.schedule }}
+          SOURCE: ${{ inputs.source }}
         run: |
-          echo "觸發方式：$EVENT ${CRON:+（cron: $CRON）}"
+          echo "觸發方式：$EVENT ${CRON:+（cron: $CRON）}${SOURCE:+（source: $SOURCE）}"
           echo "開始時間：$(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M:%S') 台灣時間"
 
+      - uses: actions/checkout@v4
+
+      - name: Read last check from state branch
+        run: |
+          if git fetch --depth=1 origin state 2>/dev/null \
+            && git show FETCH_HEAD:last_check.json > "$RUNNER_TEMP/last_check.json" 2>/dev/null; then
+            cat "$RUNNER_TEMP/last_check.json"
+          else
+            echo "沒有 last_check.json（第一次執行）"
+            rm -f "$RUNNER_TEMP/last_check.json"
+          fi
+
+      # 只用標準函式庫，不需要安裝套件；任何錯誤都照常檢查（fail-open）
+      - name: Decide
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          SOURCE: ${{ inputs.source }}
+        run: |
+          PYTHONPATH=src python3 -m fx_alert.gate \
+            --last-check "$RUNNER_TEMP/last_check.json" --event "$EVENT" --source "$SOURCE" \
+            || echo "run=true" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.run != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      config_ok: ${{ steps.validate.outputs.ok }}
+    steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5

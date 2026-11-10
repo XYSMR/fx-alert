@@ -1,5 +1,6 @@
 """GitHub Actions 設定檢查：多人版切換後的排程、部署、保活。"""
 
+import json
 from pathlib import Path
 
 WF = Path(__file__).resolve().parents[1] / ".github/workflows"
@@ -98,3 +99,58 @@ def test_skipped_runs_do_not_ping_success():
     cond = next(line for line in block.splitlines() if line.strip().startswith("if:"))
     assert "steps.check.outputs.skipped == 'false'" in cond  # 必須明確等於 false，空值不算
     assert "skipped != 'true'" not in cond
+
+
+# ---------- 去重（gate job） ----------
+
+
+def _jobs():
+    import yaml
+
+    return yaml.safe_load(read("check-rates.yml"))["jobs"]
+
+
+def test_gate_runs_first_and_check_depends_on_it():
+    jobs = _jobs()
+    assert list(jobs) == ["gate", "check", "deploy"]
+    assert jobs["check"]["needs"] == "gate"
+    # fail-open：只有明確 run=false 才略過；gate 自己失敗時 run 是空的 → 照常檢查
+    assert jobs["check"]["if"] == "${{ !cancelled() && needs.gate.outputs.run != 'false' }}"
+    assert jobs["gate"]["outputs"]["run"] == "${{ steps.decide.outputs.run }}"
+
+
+def test_skipped_check_means_no_deploy_and_no_ping():
+    jobs = _jobs()
+    # check 被略過 → config_ok 是空的 → deploy 也被略過（不部署）
+    assert jobs["deploy"]["needs"] == "check"
+    assert "needs.check.outputs.config_ok == 'true'" in jobs["deploy"]["if"]
+    # ping 只在 check job 裡；gate job 沒有任何 ping、secret
+    gate_text = json.dumps(jobs["gate"], ensure_ascii=False)
+    check_names = [s.get("name", "") for s in jobs["check"]["steps"]]
+    assert "Ping monitor (success)" in check_names and "Ping monitor (failure)" in check_names
+    assert "HEALTHCHECK" not in gate_text and "secrets." not in gate_text
+
+
+def test_gate_keeps_workflow_green():
+    """gate 判斷失敗也不能讓 workflow 變紅：python 失敗時寫 run=true；只讀權限；不裝套件。"""
+    jobs = _jobs()
+    gate = jobs["gate"]
+    assert gate["permissions"] == {"contents": "read"}
+    decide = next(s for s in gate["steps"] if s.get("id") == "decide")
+    assert "PYTHONPATH=src python3 -m fx_alert.gate" in decide["run"]
+    assert '|| echo "run=true" >> "$GITHUB_OUTPUT"' in decide["run"]
+    assert not any("pip install" in s.get("run", "") for s in gate["steps"])
+    assert not any(s.get("continue-on-error") is False for s in gate["steps"])
+
+
+def test_source_input_for_pg_cron():
+    import yaml
+
+    wf = yaml.safe_load(read("check-rates.yml"))
+    inputs = wf.get("on", wf.get(True))["workflow_dispatch"]["inputs"]
+    assert inputs["source"] == {
+        "description": inputs["source"]["description"],
+        "type": "choice",
+        "options": ["manual", "pg_cron"],
+        "default": "manual",
+    }

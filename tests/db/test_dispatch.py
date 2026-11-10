@@ -42,7 +42,10 @@ def test_check_rates_dispatch_sends_force_false(db):
     configure(db, "check-rates.yml")
     req = queued(db, dispatch(db))
     assert req["url"] == API + "check-rates.yml/dispatches"
-    assert req["body"] == {"ref": "main", "inputs": {"force": "false", "dry_run": "false"}}
+    assert req["body"] == {
+        "ref": "main",
+        "inputs": {"force": "false", "dry_run": "false", "source": "pg_cron"},
+    }
     assert req["body"]["inputs"]["force"] == "false"  # 字串，不是省略、也不是 true
 
 

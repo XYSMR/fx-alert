@@ -1,8 +1,11 @@
 """supabase/ 底下的設定檢查。"""
 
 import json
+import re
 import tomllib
 from pathlib import Path
+
+import yaml
 
 SUPABASE = Path(__file__).resolve().parents[1] / "supabase"
 
@@ -51,3 +54,41 @@ def test_secret_key_only_goes_in_apikey_header():
         assert "secretKey(env)" in src
         assert "Bearer ${SECRET_KEY" not in src
         assert "Authorization: `Bearer ${SECRET" not in src
+
+
+def _dispatch_inputs() -> dict[str, dict]:
+    sql = (SUPABASE / "migrations/20261110020000_dispatch_check_rates.sql").read_text("utf-8")
+    pairs = re.findall(r"when '([\w.-]+\.yml)' then '(\{.*?\})'::jsonb", sql)
+    return {wf: json.loads(body) for wf, body in pairs}
+
+
+def _workflow_inputs(name: str) -> dict:
+    wf = yaml.safe_load((SUPABASE.parent / ".github/workflows" / name).read_text("utf-8"))
+    on = wf.get("on", wf.get(True))  # YAML 1.1 會把 on 讀成 True
+    return on["workflow_dispatch"]["inputs"]
+
+
+def test_pg_cron_dispatch_inputs_match_workflows():
+    """pg_cron 送的 inputs 必須是 workflow 有定義的（否則 GitHub 回 422），而且全部明確給值。"""
+    sent = _dispatch_inputs()
+    assert set(sent) == {"check-rates.yml", "staging-check.yml"}
+    for workflow, inputs in sent.items():
+        defined = _workflow_inputs(workflow)
+        assert set(inputs) == set(defined), workflow  # 每個 input 都明確送，不靠預設值
+        assert all(v in ("true", "false") for v in inputs.values())
+
+
+def test_pg_cron_dispatch_never_forces():
+    """check-rates 的 force 預設是 true（給手動執行）；pg_cron 一定要送 "false"，才會檢查時段。"""
+    assert _workflow_inputs("check-rates.yml")["force"]["default"] is True
+    assert _dispatch_inputs()["check-rates.yml"]["force"] == "false"
+    assert _dispatch_inputs()["check-rates.yml"]["dry_run"] == "false"
+    assert _dispatch_inputs()["staging-check.yml"]["send"] == "false"
+
+
+def test_pg_cron_schedule_is_utc_with_taiwan_time_comments():
+    sql = (SUPABASE / "migrations/20261110020000_dispatch_check_rates.sql").read_text("utf-8")
+    assert "cron.schedule('fx-alert-dispatch', '5,35 1-7 * * 1-5'" in sql
+    assert "cron.schedule('fx-alert-dispatch-1605', '5 8 * * 1-5'" in sql
+    assert "台灣平日 09:05、09:35" in sql and "15:05、15:35" in sql and "台灣平日 16:05" in sql
+    assert "github_pat_" not in sql and "ghp_" not in sql  # token 只在 Vault

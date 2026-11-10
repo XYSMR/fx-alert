@@ -167,3 +167,21 @@ def test_daily_limit_default_and_repo_value():
 def test_invalid_daily_limit(email):
     with pytest.raises(ConfigFileError):
         parse_config(base(email=email))
+
+
+def test_repo_config_explains_targets_are_unused_in_multi_user_mode():
+    """多人版的目標價在網站上設定：config.yaml 的 target 只給退回單人版、migrate-me 用。"""
+    text = (ROOT / "config.yaml").read_text(encoding="utf-8")
+    note = text[: text.index("\ncurrencies:")]
+    assert (
+        "target、buffer 只在退回單人版、執行 migrate-me 時使用；使用者的目標價在網站上設定" in note
+    )
+    assert "MAIL_TO" not in text
+
+
+def test_readme_explains_config_targets():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme[readme.index("### `config.yaml`") :]
+    section = section[: section.index("\n## ")]
+    assert "只在退回單人版、執行 `migrate-me` 時使用" in section
+    assert "使用者的目標價在網站上設定" in section

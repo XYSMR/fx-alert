@@ -158,7 +158,19 @@ Vault 一律在後台頁面新增，**不要**用 SQL Editor 執行 `vault.creat
 
 - **GitHub Pages**（Settings → Pages）：Source 選 **GitHub Actions**。
 - **healthchecks.io**：見下方〈[監控](#監控healthchecksio)〉。
-- `config.yaml`：要追蹤的幣別、檢查時段、每日寄信上限、`state` 分支的資料夾。
+- `config.yaml`：見下一節。
+
+### `config.yaml`
+
+| 欄位 | 多人版怎麼用 |
+|---|---|
+| `currencies` 的幣別清單 | 要抓哪些幣別的匯率、網站公開顯示哪些走勢 |
+| `currencies` 的 `target`、`buffer` | **不會用到**。只在退回單人版、執行 `migrate-me` 時使用；**使用者的目標價在網站上設定**（`export-state` 也會拿來比對，網站上改過的目標價只會提醒、不會寫回） |
+| `business_hours` | 檢查時段（台灣時間 09:00–16:30、只有平日） |
+| `email.daily_limit` | 每天最多寄幾封到價通知（Gmail 個人帳號約 500 位收件人／天，預設 400） |
+| `data_dir` | `state` 分支在 Actions 上的資料夾 |
+
+改了 `config.yaml` 會觸發 CI（格式驗證）和重新部署網站；格式錯誤時排程不會檢查、網站也不會部署。
 
 ### 金鑰到期與輪替
 

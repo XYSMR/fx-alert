@@ -56,11 +56,14 @@
         <h2 id="chart-title">近 30 天走勢</h2>
         <div class="tabs" role="tablist" aria-label="走勢幣別" id="chart-tabs"></div>
       </div>
+      <p class="hint" id="chart-note" hidden></p>
+      <p class="change" id="chart-change" hidden></p>
       <div class="chart-box" id="chart-box">
-        <canvas id="chart" role="img" aria-label="匯率走勢圖"></canvas>
+        <canvas id="chart" role="img" aria-label="匯率走勢圖" aria-describedby="chart-summary"></canvas>
       </div>
       <ul class="marks" id="chart-marks"></ul>
-      <p class="empty" id="chart-summary"></p>
+      <!-- 文字摘要：給螢幕閱讀器，畫面上不顯示（避免和圖、標記重複） -->
+      <p class="visually-hidden" id="chart-summary"></p>
     </section>
 
     <!-- 登入後才出現：我的提醒、我的通知紀錄（account.js） -->

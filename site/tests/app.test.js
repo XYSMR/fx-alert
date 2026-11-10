@@ -5,7 +5,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const app = require("../app.js");
 
-const HOURS = { weekdays_only: true, start: "09:00", end: "16:30", first_check: "09:07" };
+const HOURS = { weekdays_only: true, start: "09:00", end: "16:30", first_check: "09:05" };
 const tw = (s) => new Date(`${s}+08:00`); // 台灣時間 → Date，跟電腦時區無關
 const card = (over) => ({
   code: "JPY", name: "日圓", rate: "0.2119", rate_at: "2026-11-09T16:10:12+08:00",
@@ -20,6 +20,12 @@ test("dataUrl 只接受站內 .json 檔名", () => {
   assert.equal(app.dataUrl("?data=samples/rebound.json"), "samples/rebound.json");
   assert.equal(app.dataUrl("?data=https://evil.example/x.json"), "data.json");
   assert.equal(app.dataUrl("?data=../secret.json"), "data.json");
+});
+
+test("previewPublic：?public=1 才模擬沒登入的公開頁面", () => {
+  assert.equal(app.previewPublic("?data=samples/new.json&public=1"), true);
+  assert.equal(app.previewPublic("?public=0"), false);
+  assert.equal(app.previewPublic(""), false);
 });
 
 test("previewNow：?now= 指定台灣時間，格式不對就忽略", () => {
@@ -119,20 +125,20 @@ test("卡片和詳細資訊不出現專有名詞", () => {
 
 // ---------- 4. 頂端狀態列 ----------
 
-test("inCheckHours：從第一次檢查 09:07 到 16:30，平日", () => {
-  assert.equal(app.inCheckHours(HOURS, tw("2026-11-09T09:06:00")), false);
-  assert.equal(app.inCheckHours(HOURS, tw("2026-11-09T09:07:00")), true);
+test("inCheckHours：從第一次檢查 09:05 到 16:30，平日", () => {
+  assert.equal(app.inCheckHours(HOURS, tw("2026-11-09T09:04:00")), false);
+  assert.equal(app.inCheckHours(HOURS, tw("2026-11-09T09:05:00")), true);
   assert.equal(app.inCheckHours(HOURS, tw("2026-11-09T16:30:00")), true);
   assert.equal(app.inCheckHours(HOURS, tw("2026-11-09T16:31:00")), false);
   assert.equal(app.inCheckHours(HOURS, tw("2026-11-14T12:00:00")), false); // 週六
 });
 
 test("nextCheck：今天、明天、週一", () => {
-  assert.equal(app.nextCheck(HOURS, tw("2026-11-09T08:30:00")), "今天 09:07");   // 週一早上
-  assert.equal(app.nextCheck(HOURS, tw("2026-11-09T20:00:00")), "明天 09:07");   // 週一晚上
-  assert.equal(app.nextCheck(HOURS, tw("2026-11-13T20:00:00")), "週一 09:07");   // 週五晚上
-  assert.equal(app.nextCheck(HOURS, tw("2026-11-14T12:00:00")), "週一 09:07");   // 週六
-  assert.equal(app.nextCheck(HOURS, tw("2026-11-15T12:00:00")), "明天 09:07");   // 週日 → 明天就是週一
+  assert.equal(app.nextCheck(HOURS, tw("2026-11-09T08:30:00")), "今天 09:05");   // 週一早上
+  assert.equal(app.nextCheck(HOURS, tw("2026-11-09T20:00:00")), "明天 09:05");   // 週一晚上
+  assert.equal(app.nextCheck(HOURS, tw("2026-11-13T20:00:00")), "週一 09:05");   // 週五晚上
+  assert.equal(app.nextCheck(HOURS, tw("2026-11-14T12:00:00")), "週一 09:05");   // 週六
+  assert.equal(app.nextCheck(HOURS, tw("2026-11-15T12:00:00")), "明天 09:05");   // 週日 → 明天就是週一
 });
 
 test("isStale：只有檢查時段內、超過 2 小時沒更新才算", () => {
@@ -165,12 +171,12 @@ test("statusLine：正常 / 過期 / 失敗 / 非檢查時段 / 沒資料", () =
   // 週五晚上：最後更新是 16:07，不能說過期，要說下次什麼時候更新
   s = app.statusLine(data({ ...ok, at: "2026-11-13T16:07:00+08:00" }), tw("2026-11-13T21:00:00"));
   assert.equal(s.tone, "idle");
-  assert.equal(s.text, "目前非檢查時段，下次更新：週一 09:07・最後更新 11/13 16:07");
+  assert.equal(s.text, "目前非檢查時段，下次更新：週一 09:05・最後更新 11/13 16:07");
   assert.doesNotMatch(s.text, /過期/);
 
   // 週一早上 09:00，還沒到第一次檢查
   s = app.statusLine(data({ ...ok, at: "2026-11-13T16:07:00+08:00" }), tw("2026-11-16T09:00:00"));
-  assert.equal(s.text, "目前非檢查時段，下次更新：今天 09:07・最後更新 11/13 16:07");
+  assert.equal(s.text, "目前非檢查時段，下次更新：今天 09:05・最後更新 11/13 16:07");
 
   assert.equal(app.statusLine(data(null), tw("2026-11-09T14:00:00")).tone, "idle");
 });
@@ -188,7 +194,7 @@ test("yRange：一定包含目標價（就算匯率離目標很遠）", () => {
 
 test("yRange：範圍對齊整齊的刻度間距", () => {
   const r = app.yRange(["0.2165", "0.2049", "0.2055"], "0.205");
-  assert.deepEqual(r, { min: 0.204, max: 0.218, step: 0.002 });
+  assert.deepEqual(r, { min: 0.202, max: 0.218, step: 0.002 }); // 下限含現價 0.2055 的 −1%
   const isMultiple = (n, step) => Math.abs(n / step - Math.round(n / step)) < 1e-6;
   for (const k of [app.yRange(["0.0263", "0.0268"], "0.0250"), app.yRange(["0.2119"], "0.205")]) {
     assert.ok(isMultiple(k.min, k.step) && isMultiple(k.max, k.step), JSON.stringify(k));
@@ -208,8 +214,80 @@ test("chartSummary", () => {
     high: { rate: "0.2165", at: "2026-10-14T09:05:00+08:00" },
     low: { rate: "0.2119", at: "2026-11-09T16:10:12+08:00" },
   });
-  assert.equal(app.chartSummary(c), "日圓近 30 天：最高 0.2165（10/14）、最低 0.2119（11/09），現在 0.2119，你的目標 0.205。");
+  assert.equal(app.chartSummary(c), "日圓近 30 天：最高 0.2165（10/14）、最低 0.2119（11/09），現在 0.2119，你的目標 0.205，期間變動 −2.1%。");
   assert.equal(app.chartSummary(card({ history: [] })), "日圓近 30 天還沒有走勢資料。");
+  // 資料不滿 30 天
+  const win = app.historyWindow(PARTIAL);
+  assert.match(app.chartSummary(c, win), /^日圓 11\/09 以來：/);
+  assert.equal(app.chartSummary(card({ history: [] }), win), "日圓 11/09 以來還沒有走勢資料。");
+});
+
+const PARTIAL = { history_days: 30, history_since: "2026-11-09T09:05:00+08:00", generated_at: "2026-11-10T18:12:00+08:00" };
+
+test("yRange：小波動至少顯示現價上下 1%，0.3% 的變動不會看起來像暴跌", () => {
+  const rates = ["0.2114", "0.2107", "0.2116", "0.2110"]; // 最高最低只差約 0.4%
+  const r = app.yRange(rates, undefined);
+  assert.ok(r.min <= 0.2110 * 0.99 && r.max >= 0.2110 * 1.01, JSON.stringify(r));
+  // 變動佔整個 Y 軸的比例不到三分之一
+  assert.ok((0.2116 - 0.2107) / (r.max - r.min) < 1 / 3);
+  // 可以指定現價（例如卡片上的最新匯率）
+  const k = app.yRange(["0.0263", "0.0264"], undefined, "0.0263");
+  assert.ok(k.min <= 0.0263 * 0.99 && k.max >= 0.0263 * 1.01);
+  // 大波動時照資料範圍，不受 1% 影響
+  const big = app.yRange(["0.2300", "0.2050"], undefined);
+  assert.ok(big.min <= 0.2050 * 0.99 && big.max >= 0.2300);
+});
+
+test("formatChange / periodChange：期間變動百分比", () => {
+  assert.equal(app.formatChange(-1.94), "−1.9%");
+  assert.equal(app.formatChange(0.3), "+0.3%");
+  assert.equal(app.formatChange(0.047), "+0.05%");
+  assert.equal(app.formatChange(0), "0.00%");
+  assert.equal(app.formatChange(NaN), "—");
+  const h = [["2026-11-09T09:05:00+08:00", "0.2114"], ["2026-11-10T18:07:00+08:00", "0.2107"]];
+  const ch = app.periodChange(h, "11/09 以來");
+  assert.equal(ch.text, "11/09 以來變動 −0.3%（0.2114 → 0.2107）");
+  assert.equal(app.periodChange(h).text.startsWith("近 30 天變動"), true);
+  assert.equal(app.periodChange([h[0]]), null); // 只有一個點不算變動
+  assert.equal(app.periodChange([]), null);
+});
+
+test("historyWindow：資料不滿 30 天時標示從哪天開始累積", () => {
+  assert.deepEqual(app.historyWindow(PARTIAL), {
+    partial: true, label: "11/09 以來", note: "資料從 11/09 開始累積，還不滿 30 天",
+  });
+  const full = app.historyWindow({ ...PARTIAL, history_since: "2026-10-05T09:05:00+08:00" });
+  assert.deepEqual(full, { partial: false, label: "近 30 天", note: null });
+  // 舊版 data.json 沒有這兩個欄位、或還沒有資料 → 照舊「近 30 天」
+  assert.equal(app.historyWindow({ generated_at: PARTIAL.generated_at }).partial, false);
+  assert.equal(app.historyWindow({ ...PARTIAL, history_since: null }).partial, false);
+  assert.equal(app.historyWindow(null).label, "近 30 天");
+});
+
+test("timeTicks：依實際時間排列，刻度對齊台灣時間，不重複日期", () => {
+  const t = (s) => Date.parse(`${s}+08:00`);
+  // 兩天的資料：每 6 小時一個刻度，午夜寫日期、其他寫時間
+  const short = app.timeTicks(t("2026-11-09T09:05:00"), t("2026-11-10T18:07:00"), 7);
+  assert.equal(short.hours, 6);
+  assert.deepEqual(short.ticks.map((x) => app.tickLabel(x, short.hours)),
+    ["12:00", "18:00", "11/10", "06:00", "12:00", "18:00"]);
+  // 30 天的資料：每個刻度是不同的日期
+  const long = app.timeTicks(t("2026-10-12T09:05:00"), t("2026-11-09T16:10:00"), 7);
+  const labels = long.ticks.map((x) => app.tickLabel(x, long.hours));
+  assert.ok(long.ticks.length <= 7 && long.ticks.length >= 2);
+  assert.equal(new Set(labels).size, labels.length);
+  for (const x of long.ticks) assert.equal(app.formatTime(new Date(x).toISOString()).endsWith("00:00"), true);
+  // 手機上刻度比較少
+  assert.ok(app.timeTicks(t("2026-10-12T09:05:00"), t("2026-11-09T16:10:00"), 4).ticks.length <= 4);
+});
+
+test("走勢點的位置跟實際時間成正比：8 分鐘和 8 小時的間隔不一樣寬", () => {
+  const data = require("../samples/new.json");
+  const xs = data.currencies[0].history.map(([at]) => Date.parse(at));
+  const gaps = xs.slice(1).map((x, i) => x - xs[i]);
+  assert.ok(Math.min(...gaps) <= 8 * 60 * 1000);       // 範例裡有手動執行（相隔幾分鐘）
+  assert.ok(Math.max(...gaps) >= 8 * 3600 * 1000);     // 也有隔一整晚
+  assert.equal(app.historyWindow(data).partial, true);  // 範例資料從 11/09 開始
 });
 
 // ---------- 6. 換匯試算 ----------
@@ -292,6 +370,13 @@ test("沒有目標價：卡片只顯示行情，試算只有「現在換」，�
   const conv = app.converterView(10000, "0.2119", undefined, "日圓");
   assert.equal(conv.nowLine, "約 47,192 日圓");
   assert.equal(conv.targetLine, null);
+  assert.equal(conv.targetHint, null); // 沒有提示 → 「等到目標價」整行隱藏
+  // 多人版沒登入：那一行改顯示提示，不會只有標題沒有數字
+  const pub = app.converterView(10000, "0.2119", undefined, "日圓", "登入後可以比較目標價");
+  assert.equal(pub.targetLine, null);
+  assert.equal(pub.targetHint, "登入後可以比較目標價");
+  // 有目標價時不顯示提示
+  assert.equal(app.converterView(10000, "0.2119", "0.205", "日圓", "登入後可以比較目標價").targetHint, null);
   assert.doesNotMatch(app.chartSummary({ ...c, history: [["t", "0.2119"]] }), /目標/);
   const r = app.yRange([0.21, 0.212], undefined);
   assert.ok(r.min <= 0.21 && r.max >= 0.212);

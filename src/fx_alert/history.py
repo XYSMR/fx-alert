@@ -107,6 +107,17 @@ def read_quotes(data_dir: Path, since: datetime) -> list[Quote]:
     return sorted(quotes, key=lambda q: (q.quoted_at, q.currency))
 
 
+def first_quote_at(data_dir: Path) -> datetime | None:
+    """最早的一筆牌告時間（只讀最舊的月份檔）；沒有資料回傳 None。"""
+    folder = data_dir / HISTORY_DIR
+    files = sorted(folder.glob("*.csv")) if folder.exists() else []
+    for path in files:
+        times = [datetime.fromisoformat(row["quoted_at"]) for row in _read_csv(path)]
+        if times:
+            return min(_aware(t) for t in times)
+    return None
+
+
 # ---------- 到價通知紀錄 ----------
 
 

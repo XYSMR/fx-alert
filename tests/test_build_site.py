@@ -97,8 +97,10 @@ def test_build_data_full(cfg):
         "weekdays_only": True,
         "start": "09:00",
         "end": "16:30",
-        "first_check": "09:07",
+        "first_check": "09:05",
     }
+    assert data["history_days"] == 30
+    assert data["history_since"] == "2026-10-01T09:05:00+08:00"  # 最早一筆（就算超過 30 天）
 
     jpy, krw = data["currencies"]
     assert jpy == {
@@ -157,6 +159,7 @@ def test_empty_data_dir_first_deploy(cfg):
         assert c["rate"] is None and c["distance_pct"] is None
         assert c["high"] is None and c["low"] is None
         assert c["status"] == "waiting" and c["history"] == []
+    assert data["history_since"] is None
 
 
 def test_alerts_limited_and_newest_first(cfg):
@@ -247,18 +250,41 @@ def test_high_low_ignore_quotes_older_than_30_days(cfg):
     assert jpy["high"]["rate"] == "0.2100"
 
 
-# ---------- 排程時間要和 workflow 的 cron 一致 ----------
+def test_history_since_when_data_started_recently(cfg):
+    """資料不滿 30 天：history_since 是最早一筆，前端據此顯示「資料從 11/09 開始累積」。"""
+    d = cfg.data_dir
+    append_quotes(d, datetime(2026, 11, 9, 9, 5), {"JPY": D("0.2114")})
+    append_quotes(d, datetime(2026, 11, 9, 9, 13), {"JPY": D("0.2115")})
+    data = build_data(cfg, d, now=NOW)
+    assert data["history_since"] == "2026-11-09T09:05:00+08:00"
 
 
-def test_first_check_matches_workflow_cron():
+def test_first_quote_at_reads_oldest_month(cfg):
+    from fx_alert.history import first_quote_at
+
+    d = cfg.data_dir
+    assert first_quote_at(d) is None
+    append_quotes(d, datetime(2026, 11, 2, 9, 5), {"JPY": D("0.2100")})
+    append_quotes(d, datetime(2026, 10, 30, 13, 35), {"JPY": D("0.2110")})
+    assert first_quote_at(d) == datetime(2026, 10, 30, 13, 35, tzinfo=TAIPEI)
+
+
+# ---------- 「下次更新」的時間要和 pg_cron 的排程一致 ----------
+
+
+def test_first_check_matches_pg_cron_schedule():
+    """主要排程是 pg_cron（:05、:35），GitHub schedule（:07、:37）只是備援。"""
     from pathlib import Path
 
     from fx_alert.build_site import SCHEDULE_OFFSET_MINUTES
 
-    wf = (Path(__file__).resolve().parents[1] / ".github/workflows/check-rates.yml").read_text(
+    root = Path(__file__).resolve().parents[1]
+    sql = (root / "supabase/migrations/20261110020000_dispatch_check_rates.sql").read_text(
         encoding="utf-8"
     )
-    assert f'cron: "{SCHEDULE_OFFSET_MINUTES},{SCHEDULE_OFFSET_MINUTES + 30} 1-7 * * 1-5"' in wf
+    assert SCHEDULE_OFFSET_MINUTES == 5
+    assert f"'{SCHEDULE_OFFSET_MINUTES},{SCHEDULE_OFFSET_MINUTES + 30} 1-7 * * 1-5'" in sql
+    assert f"'{SCHEDULE_OFFSET_MINUTES} 8 * * 1-5'" in sql  # 16:05
 
 
 # ---------- 公開版（多人版：AUTH_ENABLED=true 時部署用） ----------

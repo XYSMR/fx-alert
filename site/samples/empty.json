@@ -3,6 +3,8 @@
   "generated_at": "2026-11-09T16:12:00+08:00",
   "last_check": null,
   "quoted_at": null,
+  "history_days": 30,
+  "history_since": null,
   "source": {
     "bank": "兆豐銀行",
     "rate_type": "現金賣出",
@@ -15,7 +17,7 @@
     "weekdays_only": true,
     "start": "09:00",
     "end": "16:30",
-    "first_check": "09:07"
+    "first_check": "09:05"
   },
   "currencies": [
     {
@@ -38,9 +40,9 @@
       "name": "韓元",
       "rate": null,
       "rate_at": null,
-      "target": "0.0250",
+      "target": "0.0245",
       "buffer": "0.0002",
-      "rearm_above": "0.0252",
+      "rearm_above": "0.0247",
       "distance_pct": null,
       "status": "waiting",
       "status_since": null,

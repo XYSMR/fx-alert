@@ -62,4 +62,17 @@ def test_privacy_page_is_static_and_linked_only_in_multi_user_mode():
     app = (SITE / "app.js").read_text(encoding="utf-8")
     unhide = '$("privacy-note").hidden = false;'
     assert app.count(unhide) == 1
-    assert app.index(unhide) > app.index("if (plan.targetsFromDataJson)")
+    assert app.index(unhide) > app.index("if (plan.targetsFromDataJson && !forcePublic)")
+
+
+def test_hidden_attribute_always_hides():
+    """.conv div 等元件有自己的 display，要有 [hidden] 規則，「等到目標價」那一行才藏得起來。"""
+    css = (SITE / "style.css").read_text(encoding="utf-8")
+    assert re.search(r"\[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}", css)
+
+
+def test_chart_summary_is_for_screen_readers_only():
+    """走勢的文字摘要保留給螢幕閱讀器，畫面上不顯示。"""
+    tag = re.search(r'<[^>]*\sid="chart-summary"[^>]*>', INDEX)
+    assert tag and 'class="visually-hidden"' in tag.group(0)
+    assert 'aria-describedby="chart-summary"' in INDEX

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from fx_alert.config import CURRENCY_NAMES, TAIPEI, AppConfig
-from fx_alert.history import read_alerts, read_last_check, read_quotes
+from fx_alert.history import first_quote_at, read_alerts, read_last_check, read_quotes
 from fx_alert.notifier import BANK_LABEL, RATE_PAGE
 from fx_alert.rules import AlertState
 from fx_alert.state_store import load_states
@@ -40,9 +40,10 @@ def _iso(dt: datetime) -> str:
     return dt.astimezone(TAIPEI).isoformat(timespec="seconds")
 
 
-# 排程在每個整點後第 7 分鐘開始（對應 check-rates.yml 的 cron "7,37 ..."），
-# 前端用來顯示「下次更新：週一 09:07」。tests/test_build_site.py 會檢查兩邊一致。
-SCHEDULE_OFFSET_MINUTES = 7
+# 主要排程是 Supabase pg_cron 在每個整點後第 5、35 分觸發（migration 的 cron "5,35 ..."；
+# GitHub schedule 的 :07、:37 只是備援），前端用來顯示「下次更新：週一 09:05」。
+# tests/test_build_site.py 會檢查和 migration 一致。
+SCHEDULE_OFFSET_MINUTES = 5
 
 
 def distance_pct(rate: Decimal, target: Decimal) -> float:
@@ -112,6 +113,9 @@ def build_data(
     states = load_states(data_dir / "state.json")
     quotes = read_quotes(data_dir, since=now - timedelta(days=HISTORY_DAYS))
 
+    # 最早的一筆牌告：資料不滿 30 天時，前端顯示「資料從 11/09 開始累積」
+    since = first_quote_at(data_dir)
+
     by_code: dict[str, list] = {}
     for q in quotes:
         by_code.setdefault(q.currency, []).append(q)
@@ -154,6 +158,8 @@ def build_data(
         "generated_at": _iso(now),
         "last_check": read_last_check(data_dir),
         "quoted_at": _iso(quotes[-1].quoted_at) if quotes else None,
+        "history_days": HISTORY_DAYS,
+        "history_since": _iso(since) if since else None,
         "source": {"bank": "兆豐銀行", "rate_type": BANK_LABEL.split()[-1], "url": RATE_PAGE},
         "repo_url": f"https://github.com/{repo}",
         "edit_config_url": f"https://github.com/{repo}/edit/main/config.yaml",

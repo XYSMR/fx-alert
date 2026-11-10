@@ -12,6 +12,8 @@
 | rebound.json    | 日圓已通知過，但回升到「目標 < 現價 ≤ 回升門檻」之間          |
 | empty.json      | 第一次部署，還沒有任何資料                                   |
 | error.json      | 最後一次檢查失敗                                             |
+| new.json        | 資料從 11/09 才開始累積（不滿 30 天）、間隔不一（8 分鐘到一整晚）、 |
+|                 | 只有約 0.3% 的小波動                                         |
 """
 
 from __future__ import annotations
@@ -36,8 +38,8 @@ CHECK = datetime(2026, 11, 9, 16, 12, 10, tzinfo=TAIPEI)
 
 
 def fake_history(d: Path) -> None:
-    """30 天、平日每天兩份牌告的假走勢。"""
-    day, i = NOW - timedelta(days=30), 0
+    """平日每天兩份牌告的假走勢。從 35 天前開始，資料比 30 天的視窗長，網頁才會當作「滿 30 天」。"""
+    day, i = NOW - timedelta(days=35), 0
     while day.date() < NOW.date():
         if day.weekday() < 5:
             for hh, mm in ((9, 5), (13, 35)):
@@ -69,9 +71,33 @@ def scenario(name, jpy_now, jpy_state, alerts=(), ok=True, earlier_today=None):
         write(name, d)
 
 
-def write(name: str, data_dir: Path) -> None:
+def new_history() -> None:
+    """剛開始累積：11/09 09:05 起，pg_cron 每 :05、:35 一份，加上幾次手動執行（間隔只有幾分鐘），
+    晚上和隔天早上之間隔了十幾個小時。日圓只在 0.2110～0.2117 之間小幅波動（約 0.3%）。"""
+    now = datetime(2026, 11, 10, 18, 12, tzinfo=TAIPEI)
+    times = []
+    for day in (9, 10):
+        for h in range(9, 16):
+            times += [(day, h, 5), (day, h, 35)]
+        times.append((day, 16, 5))
+    times += [(9, 16, 13), (9, 18, 7), (10, 12, 20), (10, 12, 28), (10, 18, 7)]  # 手動執行
+    times.sort()
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        for i, (day, h, m) in enumerate(times):
+            jpy = round(0.2114 + 0.0003 * math.sin(i / 4) - 0.00002 * i, 4)
+            krw = round(0.0263 + 0.0001 * math.sin(i / 6), 4)
+            t = datetime(2026, 11, day, h, m)
+            append_quotes(d, t, {"JPY": D(str(jpy)), "KRW": D(str(krw))})
+        armed = CurrencyState(AlertState.ARMED, "2026-11-09T09:05:00+08:00", "0.2114", "0.205")
+        save_states(d / "state.json", {"JPY": armed})
+        write_last_check(d, now - timedelta(minutes=4), ok=True, errors=0)
+        write("new", d, now=now)
+
+
+def write(name: str, data_dir: Path, now: datetime = NOW) -> None:
     cfg = load_config(ROOT / "config.yaml")
-    write_data_json(build_data(cfg, data_dir, now=NOW, repo="XYSMR/fx-alert"), OUT / f"{name}.json")
+    write_data_json(build_data(cfg, data_dir, now=now, repo="XYSMR/fx-alert"), OUT / f"{name}.json")
     print(f"已產生 {OUT / name}.json")
 
 
@@ -91,6 +117,7 @@ def main() -> None:
     scenario("error", "0.2119", armed, ok=False)
     with tempfile.TemporaryDirectory() as tmp:
         write("empty", Path(tmp))
+    new_history()
 
 
 if __name__ == "__main__":

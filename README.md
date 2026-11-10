@@ -340,6 +340,8 @@ python -m http.server 8000 -d site         # 開 http://localhost:8000/
 | `?data=samples/rebound.json` | 日圓已通知過，但回升到目標和回升門檻之間 |
 | `?data=samples/empty.json` | 還沒有任何資料 |
 | `?data=samples/error.json` | 最後一次檢查失敗 |
+| `?data=samples/new.json` | 資料從 11/09 才開始累積（不滿 30 天）、間隔不一、只有約 0.3% 的小波動 |
+| 加上 `&public=1` | 模擬多人版**沒登入**的公開頁面（拿掉範例裡的目標價） |
 | 加上 `&now=2026-11-14T12:00` | 把「現在」設成指定的台灣時間（例如週末，看「非檢查時段」的狀態列） |
 
 > Windows 若出現「應用程式控制原則已封鎖此檔案」，把 `pytest`、`ruff` 改成 `python -m pytest`、`python -m ruff`。

@@ -33,6 +33,11 @@ function previewNow(search) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/** 本機預覽可用 ?public=1 模擬「多人版、沒登入」的公開頁面（拿掉範例資料裡的目標價） */
+function previewPublic(search) {
+  return new URLSearchParams(search).get("public") === "1";
+}
+
 /** 台灣時間的星期、分鐘數（台灣是 UTC+8、沒有日光節約，直接加 8 小時） */
 function taipeiParts(date) {
   const t = new Date(date.getTime() + 8 * 3600 * 1000);
@@ -159,7 +164,7 @@ function inCheckHours(hours, now = new Date()) {
   return isCheckDay(hours, day) && minutes >= first && minutes <= toMinutes(hours.end);
 }
 
-/** 下次更新的時間：「今天 09:07」「明天 09:07」「週一 09:07」 */
+/** 下次更新的時間：「今天 09:05」「明天 09:05」「週一 09:05」（pg_cron 每天第一次觸發） */
 function nextCheck(hours, now = new Date()) {
   const firstText = hours.first_check || hours.start;
   const first = toMinutes(firstText);
@@ -211,15 +216,19 @@ function parseAmount(text) {
   return n > 0 && n <= MAX_TWD ? n : null;
 }
 
-/** 換匯試算：現在換、在目標價換，各能拿到多少外幣（四捨五入到整數） */
-function converterView(twd, rate, target, name) {
+/**
+ * 換匯試算：現在換、在目標價換，各能拿到多少外幣（四捨五入到整數）。
+ * 沒有目標價時 targetLine 是 null；hint 有值時（多人版沒登入）「等到目標價」那一行改顯示提示文字，
+ * 沒有 hint 就整行隱藏，不會出現只有標題沒有數字的一行。
+ */
+function converterView(twd, rate, target, name, hint = null) {
   if (rate === null || rate === undefined) {
     return { error: "還沒有匯率資料，暫時無法試算" };
   }
   if (twd === null) return { error: "請輸入台幣金額（例如 10000）" };
   const nowAmount = Math.round(twd / Number(rate));
   if (target === null || target === undefined) {
-    return { nowLine: `約 ${numberFmt.format(nowAmount)} ${name}`, nowAmount, targetLine: null };
+    return { nowLine: `約 ${numberFmt.format(nowAmount)} ${name}`, nowAmount, targetLine: null, targetHint: hint };
   }
   const targetAmount = Math.round(twd / Number(target));
   const diff = targetAmount - nowAmount;
@@ -230,6 +239,7 @@ function converterView(twd, rate, target, name) {
   return {
     nowLine: `約 ${numberFmt.format(nowAmount)} ${name}`,
     targetLine: `約 ${numberFmt.format(targetAmount)} ${name}`,
+    targetHint: null,
     nowAmount,
     targetAmount,
     diff,
@@ -238,15 +248,20 @@ function converterView(twd, rate, target, name) {
 }
 
 /**
- * 走勢圖 Y 軸範圍：一定包含所有匯率和目標價，上下留一點空間，
+ * 走勢圖 Y 軸範圍：一定包含所有匯率和目標價，而且至少涵蓋「現價上下各 1%」，
+ * 避免 0.3% 的小波動被放大成像暴跌；上下留一點空間，
  * 並對齊到整齊的刻度間距（1、2、5 × 10ⁿ），避免出現 0.2032 這種刻度。
+ * current 省略時用最後一個匯率當現價。
  */
-function yRange(rates, target) {
+const MIN_HALF_RANGE = 0.01;
+function yRange(rates, target, current) {
   const values = rates.map(Number);
+  const now = Number(current ?? values[values.length - 1]);
   if (target !== null && target !== undefined) values.push(Number(target));
+  if (now > 0) values.push(now * (1 - MIN_HALF_RANGE), now * (1 + MIN_HALF_RANGE));
   const lo = Math.min(...values);
   const hi = Math.max(...values);
-  const span = Math.max(hi - lo, hi * 0.01);
+  const span = hi - lo;
   const raw = span / 5;
   const mag = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 5, 10].map((k) => k * mag)
@@ -257,6 +272,64 @@ function yRange(rates, target) {
     max: round(Math.ceil((hi + span * 0.05) / step) * step),
     step: round(step),
   };
+}
+
+/** 變動百分比：+0.3%、−1.9%；不到 0.1% 時多留一位小數（+0.05%） */
+function formatChange(pct) {
+  if (!Number.isFinite(pct)) return "—";
+  const digits = Math.abs(pct) < 0.1 ? 2 : 1;
+  const text = Math.abs(pct).toFixed(digits);
+  if (Number(text) === 0) return `${(0).toFixed(digits)}%`;
+  return `${pct > 0 ? "+" : "−"}${text}%`;
+}
+
+/** 這段期間的變動：第一個點 → 最後一個點 */
+function periodChange(history, label = "近 30 天") {
+  if (!history || history.length < 2) return null;
+  const from = Number(history[0][1]);
+  const to = Number(history[history.length - 1][1]);
+  const pct = ((to - from) / from) * 100;
+  return { pct, text: `${label}變動 ${formatChange(pct)}（${history[0][1]} → ${history[history.length - 1][1]}）` };
+}
+
+/**
+ * 走勢資料涵蓋的期間。資料不滿 30 天（最早一筆牌告比「30 天前」還晚）時，
+ * 標示「資料從 11/09 開始累積」，最高／最低也改說「11/09 以來」。
+ * 舊版 data.json 沒有 history_since 時當作滿 30 天。
+ */
+function historyWindow(data) {
+  const days = Number(data && data.history_days) || 30;
+  const full = { partial: false, label: `近 ${days} 天`, note: null };
+  const since = data && data.history_since ? new Date(data.history_since) : null;
+  const generated = data && data.generated_at ? new Date(data.generated_at) : null;
+  if (!since || !generated || Number.isNaN(since.getTime()) || Number.isNaN(generated.getTime())) return full;
+  if (generated - since >= days * 24 * 3600 * 1000) return full;
+  const day = formatDate(data.history_since);
+  return { partial: true, label: `${day} 以來`, note: `資料從 ${day} 開始累積，還不滿 ${days} 天` };
+}
+
+const HOUR = 3600 * 1000;
+const TICK_HOURS = [1, 2, 3, 6, 12, 24, 48, 72, 168];
+
+/**
+ * 時間軸刻度（台灣時間對齊整點／午夜）。點依實際時間排列，所以 8 小時和 8 分鐘的間隔看得出差別；
+ * 刻度間距挑最小、但刻度數不超過 maxCount 的那一個。回傳毫秒時間戳和刻度間距（小時）。
+ */
+function timeTicks(minT, maxT, maxCount) {
+  const span = maxT - minT;
+  const hours = TICK_HOURS.find((h) => span / (h * HOUR) <= Math.max(1, maxCount - 1)) ?? 168;
+  const step = hours * HOUR;
+  const offset = 8 * HOUR; // 台灣時間午夜 = UTC 16:00
+  let t = Math.ceil((minT + offset) / step) * step - offset;
+  const ticks = [];
+  for (; t <= maxT; t += step) ticks.push(t);
+  return { ticks, hours };
+}
+
+/** 刻度文字：一天以上（或剛好午夜）寫日期「11/09」，一天內寫時間「13:00」 */
+function tickLabel(t, hours) {
+  const [date, time] = formatTime(new Date(t).toISOString()).split(" ");
+  return hours >= 24 || time === "00:00" ? date : time;
 }
 
 /** 走勢圖上要特別標出的點：現在（最後一點）、30 天最高、30 天最低 */
@@ -270,15 +343,18 @@ function markerIndexes(history, high, low) {
 }
 
 /** 走勢的文字摘要（顯示在圖下方，也是給螢幕閱讀器的替代文字） */
-function chartSummary(c) {
+function chartSummary(c, win = historyWindow(null)) {
   const name = c.name ?? c.code;
-  if (!c.history || !c.history.length) return `${name}近 30 天還沒有走勢資料。`;
+  const label = win.partial ? ` ${win.label}` : win.label;
+  if (!c.history || !c.history.length) return `${name}${label}還沒有走勢資料。`;
   const extremes = [
     c.high && `最高 ${c.high.rate}（${formatDate(c.high.at)}）`,
     c.low && `最低 ${c.low.rate}（${formatDate(c.low.at)}）`,
   ].filter(Boolean).join("、");
   const goal = c.target === null || c.target === undefined ? "" : `，你的目標 ${c.target}`;
-  return `${name}近 30 天：${extremes}，現在 ${c.rate}${goal}。`;
+  const change = periodChange(c.history);
+  const moved = change ? `，期間變動 ${formatChange(change.pct)}` : "";
+  return `${name}${label}：${extremes}，現在 ${c.rate}${goal}${moved}。`;
 }
 
 // ---------- 登入開關（多人版） ----------
@@ -398,6 +474,7 @@ function saveAmount(n) {
 }
 
 let converterCode = null;
+let converterHint = null; // 多人版沒登入時：「等到目標價」那一行顯示的提示
 
 function setupConverter(currencies) {
   const input = $("twd");
@@ -408,7 +485,7 @@ function setupConverter(currencies) {
     if (!current) return;
     const twd = parseAmount(input.value);
     if (twd !== null) saveAmount(twd);
-    const v = converterView(twd, current.rate, current.target, current.name);
+    const v = converterView(twd, current.rate, current.target, current.name, converterHint);
     $("conv-error").hidden = !v.error;
     $("conv-result").hidden = Boolean(v.error);
     if (v.error) {
@@ -418,9 +495,14 @@ function setupConverter(currencies) {
     $("conv-now").textContent = v.nowLine;
     $("conv-now-rate").textContent = `（匯率 ${current.rate}）`;
     const hasTarget = v.targetLine !== null;
-    $("conv-target-row").hidden = !hasTarget;
+    $("conv-target-row").hidden = !hasTarget && !v.targetHint;
+    $("conv-target-row").classList.toggle("is-hint", !hasTarget);
     $("conv-verdict").hidden = !hasTarget;
-    if (!hasTarget) return;
+    if (!hasTarget) {
+      $("conv-target").textContent = v.targetHint ?? "";
+      $("conv-target-rate").textContent = "";
+      return;
+    }
     $("conv-target").textContent = v.targetLine;
     $("conv-target-rate").textContent = `（匯率 ${current.target}）`;
     $("conv-verdict").textContent = v.verdict;
@@ -442,11 +524,14 @@ function setupConverter(currencies) {
 const COLORS = { rate: "#2f5fb3", target: "#a14a00", mark: "#1c2430", grid: "#e6e9ee", text: "#5b6676" };
 let chart = null;
 
+let chartWindow = historyWindow(null); // 走勢資料涵蓋的期間（main() 依 data.json 設定）
+
 function renderMarks(c) {
+  const span = chartWindow.partial ? chartWindow.label : "30 天";
   const items = [];
   if (c.rate) items.push(["mark-now", `現在 ${c.rate}`, c.rate_at ? `（${formatTime(c.rate_at)}）` : ""]);
-  if (c.high) items.push(["mark-high", `30 天最高 ${c.high.rate}`, `（${formatDate(c.high.at)}）`]);
-  if (c.low) items.push(["mark-low", `30 天最低 ${c.low.rate}`, `（${formatDate(c.low.at)}）`]);
+  if (c.high) items.push(["mark-high", `${span}最高 ${c.high.rate}`, `（${formatTime(c.high.at)}）`]);
+  if (c.low) items.push(["mark-low", `${span}最低 ${c.low.rate}`, `（${formatTime(c.low.at)}）`]);
   $("chart-marks").replaceChildren(...items.map(([cls, main, sub]) =>
     el("li", {}, el("span", { class: `mark ${cls}`, "aria-hidden": "true" }), main, el("span", { class: "sub" }, sub))));
 }
@@ -457,31 +542,41 @@ function drawChart(c) {
   const hasData = c.history.length > 0;
   $("chart-box").hidden = !hasData;
   $("chart-marks").hidden = !hasData;
-  $("chart-summary").textContent = chartSummary(c);
+  $("chart-note").hidden = !chartWindow.note;
+  $("chart-note").textContent = chartWindow.note ?? "";
+  const change = periodChange(c.history, chartWindow.label);
+  $("chart-change").hidden = !change;
+  $("chart-change").textContent = change ? change.text : "";
+  $("chart-change").className = `change ${change && change.pct < 0 ? "down" : "up"}`;
+  // 文字摘要只給螢幕閱讀器（畫面上已有圖和上面的標記，不重複顯示）
+  $("chart-summary").textContent = chartSummary(c, chartWindow);
   if (!hasData) return;
   renderMarks(c);
   if (typeof Chart === "undefined") return;
 
-  const labels = c.history.map(([t]) => formatTime(t));
-  const rates = c.history.map(([, v]) => Number(v));
+  // X 軸依實際時間排列（毫秒時間戳），晚上、週末沒有牌告的空檔會照實際長度畫出來
+  const points = c.history.map(([t, v]) => ({ x: new Date(t).getTime(), y: Number(v) }));
+  const rates = points.map((pt) => pt.y);
+  const minT = points[0].x;
+  const maxT = points.length > 1 ? points[points.length - 1].x : minT + HOUR;
   const m = markerIndexes(c.history, c.high, c.low);
   const pointStyle = (i) => (i === m.current ? "circle" : "triangle");
   const isMark = (i) => i === m.current || i === m.high || i === m.low;
-  const range = yRange(rates, c.target);
-  $("chart").setAttribute("aria-label", chartSummary(c));
+  const range = yRange(rates, c.target, c.rate);
+  const maxTicks = window.innerWidth < 640 ? 4 : 7;
+  let tickHours = 24;
 
   chart = new Chart($("chart"), {
     type: "line",
     data: {
-      labels,
       datasets: [
         {
           label: `${c.name}匯率`,
-          data: rates,
+          data: points,
           borderColor: COLORS.rate,
           borderWidth: 2,
-          tension: 0.2,
-          pointRadius: rates.map((_, i) => (i === m.current ? 6 : isMark(i) ? 6 : 0)),
+          tension: 0,
+          pointRadius: rates.map((_, i) => (isMark(i) ? 6 : 0)),
           pointHoverRadius: 6,
           pointHitRadius: 8,
           pointStyle: rates.map((_, i) => pointStyle(i)),
@@ -492,7 +587,7 @@ function drawChart(c) {
         },
         ...(c.target === null || c.target === undefined ? [] : [{
           label: `你的目標 ${c.target}`,
-          data: labels.map(() => Number(c.target)),
+          data: [{ x: minT, y: Number(c.target) }, { x: maxT, y: Number(c.target) }],
           borderColor: COLORS.target,
           borderWidth: 2,
           borderDash: [6, 4],
@@ -505,24 +600,34 @@ function drawChart(c) {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
+      parsing: false,
       layout: { padding: { right: 8 } }, // 最後一個點（現在）不要被切掉
-      interaction: { mode: "index", intersect: false },
+      interaction: { mode: "nearest", axis: "x", intersect: false },
       plugins: {
         legend: { labels: { color: COLORS.text, boxHeight: 2 } },
-        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label.split(" ")[0]}：${Number(ctx.parsed.y).toFixed(4)}` } },
+        tooltip: {
+          filter: (item) => item.datasetIndex === 0,
+          callbacks: {
+            title: (items) => (items.length ? formatTime(new Date(items[0].parsed.x).toISOString()) : ""),
+            label: (ctx) => `${ctx.dataset.label.split(" ")[0]}：${Number(ctx.parsed.y).toFixed(4)}`,
+          },
+        },
       },
       scales: {
         x: {
-          ticks: {
-            color: COLORS.text,
-            maxRotation: 0,
-            maxTicksLimit: window.innerWidth < 640 ? 4 : 7,
-            callback(value) { return this.getLabelForValue(value).split(" ")[0]; },
+          type: "linear",
+          min: minT,
+          max: maxT,
+          afterBuildTicks(axis) {
+            const t = timeTicks(axis.min, axis.max, maxTicks);
+            tickHours = t.hours;
+            axis.ticks = t.ticks.map((value) => ({ value }));
           },
+          ticks: { color: COLORS.text, maxRotation: 0, autoSkip: false, callback: (v) => tickLabel(v, tickHours) },
           grid: { display: false },
         },
         y: {
-          min: range.min, // 有目標價時一定包含它，「你的目標」那條線一定看得到
+          min: range.min, // 有目標價時一定包含它；至少涵蓋現價 ±1%
           max: range.max,
           ticks: { color: COLORS.text, stepSize: range.step, callback: (v) => Number(v).toFixed(4) },
           grid: { color: COLORS.grid },
@@ -572,6 +677,7 @@ async function main() {
   const now = previewNow(location.search) ?? new Date();
   if (previewNow(location.search)) $("preview-note").textContent = `（預覽時間：${formatTime(now.toISOString())}）`;
   const plan = bootPlan(window.FX_CONFIG);
+  const forcePublic = previewPublic(location.search);
   const url = dataUrl(location.search);
   let data;
   try {
@@ -587,10 +693,12 @@ async function main() {
     return;
   }
   renderStatus(data, now);
+  chartWindow = historyWindow(data);
+  $("chart-title").textContent = `${chartWindow.label}走勢`;
   if (data.repo_url) $("repo-link").href = data.repo_url;
   $("generated-at").textContent = formatTime(data.generated_at);
 
-  if (plan.targetsFromDataJson) {
+  if (plan.targetsFromDataJson && !forcePublic) {
     // 登入功能關閉：和單人版完全一樣
     renderCurrencies(data.currencies);
     renderAlerts(data);
@@ -604,10 +712,12 @@ async function main() {
   $("privacy-note").hidden = false;
   const publicList = publicCurrencies(data.currencies);
   cardHint = "登入後可以設定目標價，到價時寄 Email 給你";
+  converterHint = "登入後可以比較目標價";
   renderCurrencies(publicList);
-  if (window.FxAccount) {
+  if (window.FxAccount && plan.auth) {
     window.FxAccount.start(plan.auth, publicList, (personal, loggedIn) => {
       cardHint = loggedIn ? "在下方「我的提醒」設定目標價" : "登入後可以設定目標價，到價時寄 Email 給你";
+      converterHint = loggedIn ? null : "登入後可以比較目標價";
       renderCurrencies(personal);
     });
   }
@@ -616,9 +726,10 @@ async function main() {
 // 瀏覽器裡直接執行；在 Node（測試）裡只匯出純函式
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    dataUrl, previewNow, formatTime, formatDate, timeAgo, formatPct, rateHint, cardView,
+    dataUrl, previewNow, previewPublic, formatTime, formatDate, timeAgo, formatPct, rateHint, cardView,
     toMinutes, inCheckHours, nextCheck, isStale, statusLine, parseAmount, converterView,
-    yRange, markerIndexes, chartSummary, bootPlan, publicCurrencies,
+    yRange, formatChange, periodChange, historyWindow, timeTicks, tickLabel,
+    markerIndexes, chartSummary, bootPlan, publicCurrencies,
   };
 } else {
   window.FxApp = { formatTime };

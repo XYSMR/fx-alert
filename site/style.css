@@ -1,3 +1,6 @@
+/* hidden 屬性一定要隱藏（.conv div 等元件有自己的 display，會蓋過瀏覽器預設） */
+[hidden] { display: none !important; }
+
 :root {
   --bg: #f6f7f9;
   --surface: #ffffff;
@@ -91,6 +94,7 @@ details li + li { margin-top: 4px; }
 .conv div { display: grid; grid-template-columns: 7em 1fr; align-items: baseline; }
 .conv dt { color: var(--muted); }
 .conv dd { margin: 0; font-variant-numeric: tabular-nums; }
+.conv .is-hint b { font-size: 1rem; font-weight: normal; color: var(--muted); }
 .conv b { font-size: 1.15rem; }
 .verdict { margin: 12px 0; padding: 10px 12px; border-radius: 10px; background: var(--blue-bg); color: var(--blue); font-weight: 600; }
 
@@ -103,7 +107,6 @@ details li + li { margin-top: 4px; }
 .mark-high, .mark-low { width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; }
 .mark-high { border-bottom: 11px solid var(--text); }
 .mark-low { border-top: 11px solid var(--text); }
-#chart-summary { margin-top: 8px; font-size: .9rem; }
 
 /* ---------- 通知紀錄 ---------- */
 .alerts { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
@@ -205,3 +208,7 @@ button.danger-button:disabled { opacity: .45; cursor: not-allowed; }
 .unsubscribe .notice h2 { margin: 0 0 4px; font-size: 1.05rem; }
 .unsubscribe .notice p { margin: 0; color: var(--text); }
 .unsubscribe .back { margin: 20px 0 0; }
+
+/* 走勢圖：資料期間說明、期間變動 */
+#chart-note { margin: 0 0 4px; }
+.change { margin: 0 0 8px; font-variant-numeric: tabular-nums; color: var(--muted); }

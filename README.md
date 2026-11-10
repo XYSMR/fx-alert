@@ -57,6 +57,7 @@ CI 會變紅，排程不會檢查，頁面也不會部署。
    | `SMTP_USER` | 寄件 Gmail 帳號 |
    | `SMTP_PASSWORD` | Gmail 應用程式密碼（帳號需開啟兩步驟驗證） |
    | `MAIL_TO` | 收件人，多個用逗號分隔 |
+   | `HEALTHCHECK_PING_URL` | （選用）healthchecks.io 的 ping 網址，見[排程監控](#排程沒有執行時怎麼排查) |
 
 2. **Pages**（Settings → Pages）：Source 選 **GitHub Actions**。
 3. 到 Actions 手動執行一次 `check-rates`。
@@ -72,6 +73,51 @@ CI 會變紅，排程不會檢查，頁面也不會部署。
 
 repo 是 public，所以這些檔案和頁面上的 `data.json` **不包含任何 email、錯誤訊息全文或 Secrets**。
 `build-site` 不讀取任何 SMTP 相關的環境變數，部署前和 CI 也會再掃描一次。
+
+## 排程沒有執行時怎麼排查
+
+GitHub Actions 的 `schedule` 是「盡力而為」：官方文件寫明負載高時（尤其整點、UTC 00:00–08:00）會**延遲**，
+負載夠高時排隊中的排程會被**直接丟掉**，而且被丟掉的排程**不會出現在任何紀錄裡，也不會顯示失敗**。
+新建立、活動少的 repo 特別容易遇到。所以要靠外部監控發現「沒有執行」。
+
+### 監控：healthchecks.io（免費方案）
+
+每次排程檢查成功後，`check-rates` 會 ping 一次 healthchecks.io；失敗時 ping `/fail`。
+超過時間沒收到 ping，healthchecks.io 會寄信通知。
+
+1. 到 <https://healthchecks.io> 註冊（免費方案可監控 20 個工作），新增一個 check：
+   - **Schedule**：選 **Cron**，填兩行
+     ```
+     7,37 9-15 * * 1-5
+     7 16 * * 1-5
+     ```
+   - **Time Zone**：`Asia/Taipei`
+   - **Grace Time**：`30 minutes`（下一次排程也沒來，就是約 1 小時沒有 ping → 寄信）
+   - **Integrations**：Email（預設就是註冊的信箱）
+2. 複製 check 的 **ping URL**，放到 GitHub **Secrets** 的 `HEALTHCHECK_PING_URL`。
+   ⚠ 這個網址等同密碼（知道的人可以假裝「一切正常」），**不要**寫進 repo、issue 或截圖。
+3. 到 Actions 手動跑一次 `check-rates`，healthchecks.io 的 check 應該變成綠色 **up**。
+
+`dry_run` 不會 ping；沒設定 `HEALTHCHECK_PING_URL` 時只會略過，不會讓排程失敗。
+
+### 收到 DOWN 通知時，照順序檢查
+
+1. **workflow 是不是被停用了**：打開 Actions → `check-rates`，上方出現「This workflow was disabled」就按 **Enable workflow**。
+   公開 repo **60 天沒有任何活動**時，GitHub 會自動停用排程。
+2. **有沒有排程紀錄**：Actions → `check-rates`，在搜尋框輸入 `event:schedule`。
+   - **有紀錄、但是紅的**：點進去看哪一步失敗。最前面的 **Show trigger** 會印出觸發方式、cron 和實際開始時間。
+     常見原因：`Validate config.yaml` 設定檔格式錯誤；`Check rates` 兆豐 API 或 Supabase 暫時連不上（下一次通常就好了）；
+     Secrets 被改錯（Supabase 回 401）。
+   - **有紀錄、但開始時間晚很多**：GitHub 排程延遲，資料只是晚一點更新。
+   - **完全沒有紀錄**：排程被 GitHub 丟掉了。先手動補跑（下一步），連續好幾次都這樣，再考慮改用外部觸發。
+3. **時間有沒有算錯**：cron 用 **UTC**。`7,37 1-7 * * 1-5` ＝ 台灣平日 09:07–15:37，另一行 `7 8 * * 1-5` ＝ 16:07。
+   程式在台灣時間 09:00–16:30 以外會自動略過（不算錯誤，也不會 commit）。
+4. **排程只看 `main` 上的 workflow 檔**：在其他分支改 cron 不會生效。
+5. **補救**：
+   - Actions → `check-rates` → **Run workflow**（`force` 保持勾選）立刻補跑一次。
+   - 如果懷疑 GitHub 沒有登記到排程（例如剛停用又啟用過），push 一個修改 `.github/workflows/check-rates.yml` 的 commit 到 `main`，
+     讓 GitHub 重新讀取排程。
+6. **確認恢復**：`state` 分支出現新的 `data: … 台灣時間` commit，healthchecks.io 的 check 回到 **up**。
 
 ## 本機開發
 

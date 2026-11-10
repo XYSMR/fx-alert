@@ -36,6 +36,15 @@ jobs:
     outputs:
       config_ok: ${{ steps.validate.outputs.ok }}
     steps:
+      # 排查用：記下這次是誰觸發的、預定的 cron、實際開始時間（GitHub 排程可能延遲或被丟掉）
+      - name: Show trigger
+        env:
+          EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+        run: |
+          echo "觸發方式：$EVENT ${CRON:+（cron: $CRON）}"
+          echo "開始時間：$(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M:%S') 台灣時間"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -116,6 +125,34 @@ jobs:
         run: |
           echo "::error::fx_alert check 回報錯誤（結束碼 ${{ steps.check.outputs.exit_code }}），請看上面 Check rates 的輸出"
           exit 1
+
+      # 監控（healthchecks.io）：檢查成功就 ping，失敗就 ping /fail；一段時間沒收到 ping 會寄信通知。
+      # ping 網址等同密碼（知道就能假裝「一切正常」），只放在 Secrets，不寫進 repo、不印出來。
+      # 沒設定 HEALTHCHECK_PING_URL 時略過；ping 失敗不影響這次檢查的結果。
+      - name: Ping monitor (success)
+        if: ${{ success() && !inputs.dry_run }}
+        env:
+          HC_URL: ${{ secrets.HEALTHCHECK_PING_URL }}
+        run: |
+          if [ -z "$HC_URL" ]; then
+            echo "::notice::沒有設定 HEALTHCHECK_PING_URL，略過監控 ping"
+            exit 0
+          fi
+          curl -fsS -m 10 --retry 3 -o /dev/null "$HC_URL" \
+            && echo "已通知監控：檢查成功" \
+            || echo "::warning::監控 ping 失敗（不影響這次檢查）"
+
+      - name: Ping monitor (failure)
+        if: ${{ failure() && !inputs.dry_run }}
+        env:
+          HC_URL: ${{ secrets.HEALTHCHECK_PING_URL }}
+        run: |
+          if [ -z "$HC_URL" ]; then
+            exit 0
+          fi
+          curl -fsS -m 10 --retry 3 -o /dev/null "$HC_URL/fail" \
+            && echo "已通知監控：檢查失敗" \
+            || echo "::warning::監控 ping 失敗"
 
   # 檢查完就更新頁面。就算這次抓匯率失敗也要部署，頁面才會顯示「有錯誤」；
   # 但設定檔不合法、或是 dry-run 時不部署。

@@ -28,12 +28,13 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from fx_alert.config import TAIPEI, AppConfig, ConfigFileError, load_config
+from fx_alert.currencies import CODES, SPOT_ONLY
 from fx_alert.fetcher import FetchError, fetch_rates_json
 from fx_alert.history import append_quotes, write_last_check
 from fx_alert.notifier import (
@@ -83,10 +84,13 @@ def run_check(
     log: Callable[[str], None] = print,
     store: RuleStore | None = None,
     unsubscribe: UnsubscribeConfig | None = None,
+    track: Iterable[str] = (),
 ) -> CheckResult:
     """store 沒給就用單人版的 FileStore（config.yaml + state.json，收件人 MAIL_TO）。
 
     unsubscribe：多人版給；有 user_id 的規則，信裡會加上退訂連結和 List-Unsubscribe 標頭。
+    track：除了規則用到的幣別，另外要記錄走勢的幣別（多人版傳入全部 18 種）。
+      這些幣別缺報價只記一行注意，不算錯誤；有人設定規則的幣別缺報價才算錯誤。
     """
     result = CheckResult()
     local_now = now.astimezone(TAIPEI)
@@ -98,7 +102,9 @@ def run_check(
 
     store = store or FileStore(cfg, recipients=email_cfg.to)
     try:
-        _check_rates(cfg, store, notifier, email_cfg, local_now, fetch, result, log, unsubscribe)
+        _check_rates(
+            cfg, store, notifier, email_cfg, local_now, fetch, result, log, unsubscribe, track
+        )
     finally:
         # 不論成功失敗都記錄這次檢查，頁面才看得出系統還活著
         write_last_check(cfg.data_dir, local_now, ok=not result.errors, errors=len(result.errors))
@@ -106,7 +112,7 @@ def run_check(
 
 
 def _check_rates(
-    cfg, store, notifier, email_cfg, local_now, fetch, result, log, unsubscribe
+    cfg, store, notifier, email_cfg, local_now, fetch, result, log, unsubscribe, track=()
 ) -> None:
     try:
         watches = store.load_watches()
@@ -128,16 +134,22 @@ def _check_rates(
         return
 
     log(f"牌告時間：{board.quoted_at or '（未提供）'}")
-    # 走勢記錄 config 追蹤的幣別；規則用到的幣別也一併取價
-    codes = dict.fromkeys([r.currency for r in cfg.rules] + [w.rule.currency for w in watches])
+    # 必要：config 的幣別和有人設定規則的幣別；缺報價就是錯誤（可能漏通知）
+    required = dict.fromkeys([r.currency for r in cfg.rules] + [w.rule.currency for w in watches])
     rates = {}
-    for code in codes:
+    for code in dict.fromkeys([*required, *track]):
         try:
             rates[code] = get_cash_sell(board, code)
         except ParseError as exc:
-            result.errors.append(str(exc))  # 一個幣別出錯，不影響其他幣別
+            if code in required:
+                result.errors.append(str(exc))  # 一個幣別出錯，不影響其他幣別
+            else:
+                log(f"注意：{exc}（沒有人設定這個幣別，這次只略過）")
+    unknown = sorted(set(board.quotes) - set(CODES) - set(SPOT_ONLY))
+    if unknown:
+        log(f"注意：兆豐牌告出現尚未支援的幣別 {', '.join(unknown)}，要支援請更新 currencies.py")
     if append_quotes(cfg.data_dir, board.quoted_at, rates):
-        log("走勢：記錄了新的牌告")
+        log(f"走勢：記錄了新的牌告（{len(rates)} 種幣別）")
 
     for w in watches:
         rule = w.rule
@@ -242,6 +254,7 @@ def _cmd_check(args) -> int:
         force=args.force,
         store=store,
         unsubscribe=unsubscribe,
+        track=CODES if args.mode == "multi" else (),  # 多人版記錄全部 18 種幣別的走勢
     )
     for err in result.errors:
         print(f"錯誤：{redact_emails(err)}", file=sys.stderr)

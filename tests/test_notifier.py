@@ -62,12 +62,12 @@ def test_bad_port_raises():
 
 def test_alert_message_content(cfg):
     msg = build_alert_message(cfg, JPY, D("0.2049"), QUOTED)
-    assert msg["Subject"] == "[FX Alert] JPY 到價：0.2049 ≤ 目標 0.205"
+    assert msg["Subject"] == "[FX Alert] JPY 到價：0.2049 ≤ 目標 0.2050"
     assert msg["From"] == "me@gmail.com"
     assert msg["To"] == "me@gmail.com, friend@example.com"
     body = msg.get_content()
     assert "目前匯率：0.2049" in body
-    assert "目標匯率：≤ 0.205" in body
+    assert "目標匯率：≤ 0.2050" in body
     assert "2026-11-09 10:07" in body
     assert "> 0.206" in body  # 告訴使用者什麼時候會再通知
     assert "abcdefghijklmnop" not in msg.as_string()

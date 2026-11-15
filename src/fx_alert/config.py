@@ -13,17 +13,15 @@ from typing import Any
 
 import yaml
 
+from fx_alert.currencies import CATALOG, CODES, SPOT_ONLY, TICK, auto_buffer, is_on_tick, max_buffer
 from fx_alert.rules import Rule
 
 # 台灣沒有日光節約時間，用固定 +8 時區即可（也避免 Windows 上缺少 tzdata 的問題）
 TAIPEI = timezone(timedelta(hours=8), name="Asia/Taipei")
 
-# 兆豐銀行牌告匯率 API 有提供的幣別
-SUPPORTED_CURRENCIES = frozenset(
-    "USD HKD GBP JPY AUD CAD SGD ZAR SEK CHF THB NZD EUR KRW MYR IDR PHP MOP VND CNY".split()
-)
-CURRENCY_NAMES = {"JPY": "日圓", "KRW": "韓元", "USD": "美元", "EUR": "歐元", "CNY": "人民幣"}
-MAX_BUFFER_RATIO = Decimal("0.1")  # buffer 不應超過目標價的 10%
+# 兆豐有現金賣出價的 18 種幣別（見 currencies.py）
+SUPPORTED_CURRENCIES = frozenset(CODES)
+CURRENCY_NAMES = {c.code: c.name_zh for c in CATALOG}
 
 TOP_LEVEL_KEYS = {"data_dir", "business_hours", "currencies", "email"}
 EMAIL_KEYS = {"daily_limit"}
@@ -116,6 +114,10 @@ def parse_config(data: Any, base_dir: Path = Path(".")) -> AppConfig:
     rules = []
     for raw_code, spec in currencies.items():
         code = str(raw_code).strip()
+        if code in SPOT_ONLY:
+            raise ConfigFileError(
+                f"不支援 {code}（{SPOT_ONLY[code]}）：兆豐只提供即期匯率，沒有現金賣出價"
+            )
         if code not in SUPPORTED_CURRENCIES:
             hint = "（幣別代碼要大寫）" if code.upper() in SUPPORTED_CURRENCIES else ""
             raise ConfigFileError(f"不支援的幣別代碼：{code}{hint}")
@@ -123,14 +125,27 @@ def parse_config(data: Any, base_dir: Path = Path(".")) -> AppConfig:
             raise ConfigFileError(f"{code} 缺少 target")
         _check_keys(spec, CURRENCY_KEYS, code)
         target = _decimal(spec["target"], f"{code}.target")
-        buffer = _decimal(spec.get("buffer", "0"), f"{code}.buffer")
+        if target > 0 and not is_on_tick(target):
+            raise ConfigFileError(
+                f"{code}.target = {target}：兆豐牌告只到小數第 4 位，最多寫 4 位小數"
+            )
+        # 沒寫 buffer：和網頁一樣自動用目標價的 0.5%（至少 0.0001）
+        buffer = _decimal(spec["buffer"], f"{code}.buffer") if "buffer" in spec else None
         try:
-            rule = Rule(code, target=target, buffer=buffer)
+            rule = Rule(
+                code, target=target, buffer=auto_buffer(target) if buffer is None else buffer
+            )
         except ValueError as exc:
             raise ConfigFileError(str(exc)) from exc
-        if buffer > target * MAX_BUFFER_RATIO:
-            limit = target * MAX_BUFFER_RATIO
-            raise ConfigFileError(f"{code}.buffer = {buffer} 太大：不應超過目標價的 10%（{limit}）")
+        if buffer is not None:
+            if buffer < TICK or not is_on_tick(buffer):
+                raise ConfigFileError(
+                    f"{code}.buffer = {buffer}：至少要一個報價單位 0.0001，而且最多 4 位小數"
+                )
+            if buffer > max_buffer(target):
+                raise ConfigFileError(
+                    f"{code}.buffer = {buffer} 太大：不應超過目標價的 10%（{max_buffer(target)}）"
+                )
         rules.append(rule)
 
     email_raw = data.get("email") or {}

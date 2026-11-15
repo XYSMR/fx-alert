@@ -29,10 +29,32 @@ test("decimalsOf 依銀行報價的位數，沒有就當 4 位", () => {
 
 // ---------- 回升門檻 ----------
 
-test("沒填回升門檻 = 目標價的 0.5%（四捨五入到 6 位，和資料庫一樣）", () => {
-  assert.equal(a.autoBuffer(M("0.205")), M("0.001025"));
-  assert.equal(a.autoBuffer(M("0.025")), M("0.000125"));
-  assert.equal(a.autoBuffer(M("0.0001")), 1n); // 0.0000005 → 0.000001
+test("沒填回升門檻 = 目標價的 0.5%，四捨五入到報價單位 0.0001、至少 0.0001（和資料庫、Python 一樣）", () => {
+  assert.equal(a.autoBuffer(M("0.205")), M("0.001")); // 0.001025 → 0.0010
+  assert.equal(a.autoBuffer(M("0.21")), M("0.0011")); // 0.00105 → 0.0011（四捨五入）
+  assert.equal(a.autoBuffer(M("0.025")), M("0.0001")); // 0.000125 → 0.0001
+  assert.equal(a.autoBuffer(M("0.0015")), M("0.0001")); // 越南盾：0.0000075 → 至少 0.0001
+  assert.equal(a.autoBuffer(M("0.0021")), M("0.0001")); // 印尼盾
+  assert.equal(a.autoBuffer(M("32.5")), M("0.1625")); // 美元
+});
+
+test("越南盾、印尼盾：回升價格、顯示的價格都是牌告的 4 位小數（不會出現 0.0015075）", () => {
+  for (const [target, rate] of [["0.0015", "0.0015"], ["0.0021", "0.0021"], ["0.0010", "0.0010"]]) {
+    const t = M(target);
+    for (const text of [a.rearmQuote(t, null, 4), a.formatPrice(t + a.autoBuffer(t))]) {
+      assert.match(text, /^\d+\.\d{4}$/, text);
+    }
+    const [card] = a.personalCurrencies(
+      [{ code: "VND", name: "越南盾", rate }],
+      [{ currency: "VND", target, buffer: null, enabled: true, state: "armed" }],
+      { email_enabled: true },
+    );
+    assert.match(card.target, /^\d+\.\d{4}$/);
+    assert.match(card.rearm_above, /^\d+\.\d{4}$/);
+  }
+  assert.equal(a.rearmQuote(M("0.0015"), null, 4), "0.0017"); // 回升門檻 0.0016，要 > 0.0016
+  assert.equal(a.formatPrice(M("0.001507")), "0.0015");
+  assert.equal(a.formatPrice(M("0.00215")), "0.0022");
 });
 
 test("進階設定的白話說明：報價位數 + 比門檻大的最小報價", () => {
@@ -49,7 +71,10 @@ test("validateTarget", () => {
   assert.deepEqual(a.validateTarget(" 0.2050 "), { micros: 205000n, value: "0.205" });
   assert.match(a.validateTarget("0").error, /大於 0/);
   assert.match(a.validateTarget("abc").error, /請輸入數字/);
-  assert.match(a.validateTarget("0.1234567").error, /最多 6 位小數/);
+  assert.match(a.validateTarget("0.1234567").error, /最多 4 位小數/);
+  assert.match(a.validateTarget("0.20505").error, /兆豐牌告只到小數第 4 位/);
+  assert.match(a.validateTarget("0.00155").error, /最多 4 位小數/); // 越南盾
+  assert.deepEqual(a.validateTarget("0.0015"), { micros: 1500n, value: "0.0015" });
   assert.match(a.validateTarget("1000").error, /太大/);
 });
 
@@ -59,6 +84,15 @@ test("validateBuffer：空白 = 自動；最多目標價的 10%", () => {
   assert.deepEqual(a.validateBuffer("0.0205", M("0.205")), { micros: 20500n, value: "0.0205" });
   assert.match(a.validateBuffer("0.0206", M("0.205")).error, /10%（0.0205）/);
   assert.match(a.validateBuffer("x", M("0.205")).error, /請輸入數字/);
+});
+
+test("validateBuffer：至少一個報價單位 0.0001、最多 4 位小數", () => {
+  assert.match(a.validateBuffer("0", M("0.205")).error, /至少 0.0001/);
+  assert.match(a.validateBuffer("0.00005", M("0.0015")).error, /至少 0.0001/);
+  assert.match(a.validateBuffer("0.00105", M("0.205")).error, /最多 4 位小數/);
+  // 越南盾目標 0.0010：10% 只有 0.0001，仍可設一個報價單位，但不能更多
+  assert.deepEqual(a.validateBuffer("0.0001", M("0.001")), { micros: 100n, value: "0.0001" });
+  assert.match(a.validateBuffer("0.0002", M("0.001")).error, /10%（0.0001）/);
 });
 
 test("目標價和現價差超過 30% 要再確認（防止打錯小數點）", () => {
@@ -89,8 +123,8 @@ const RULE = {
 
 test("personalCurrencies：只有設定過的幣別有目標，用語和介面改版一致", () => {
   const [jpy, krw] = a.personalCurrencies(PUBLIC, [RULE], { email_enabled: true });
-  assert.equal(jpy.target, "0.205"); // 不顯示 0.205000
-  assert.equal(jpy.rearm_above, "0.206025");
+  assert.equal(jpy.target, "0.2050"); // 顯示到牌告的 4 位小數（不是 0.205000）
+  assert.equal(jpy.rearm_above, "0.2060"); // 自動門檻 0.0010（不是 0.206025）
   assert.equal(jpy.distance_pct, 3.302);
   assert.equal(jpy.status, "waiting");
   assert.equal(krw.target, undefined);

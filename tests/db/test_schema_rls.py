@@ -35,7 +35,8 @@ def test_every_public_table_has_rls(db):
 
 def test_anon_can_read_currencies(db):
     db.as_anon()
-    assert db.rows("select code from public.currencies order by code") == [("JPY",), ("KRW",)]
+    codes = [c for (c,) in db.rows("select code from public.currencies order by sort_order")]
+    assert len(codes) == 18 and codes[:4] == ["USD", "HKD", "GBP", "JPY"]  # 牌告順序
 
 
 def test_anon_cannot_write_currencies(db):
@@ -262,7 +263,8 @@ def test_buffer_defaults_to_half_percent_and_follows_target(db, alice):
     db.run("insert into public.alert_rules (currency, target) values ('JPY', 0.2)")
     assert db.one("select buffer, effective_buffer from public.alert_rules") == (None, D("0.001"))
     db.run("update public.alert_rules set target = 0.21")
-    assert db.one("select effective_buffer from public.alert_rules") == D("0.00105")
+    # 0.5% = 0.00105 → 四捨五入到報價單位 0.0001
+    assert db.one("select effective_buffer from public.alert_rules") == D("0.0011")
     # 進階設定填了 buffer 就用填的
     db.run("update public.alert_rules set buffer = 0.003")
     assert db.one("select effective_buffer from public.alert_rules") == D("0.003")

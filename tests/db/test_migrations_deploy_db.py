@@ -45,7 +45,7 @@ def test_baseline_object_checks_pass_on_current_schema(conn):
 @pytest.mark.parametrize(
     ("break_it", "expected"),
     [
-        ("delete from cron.job where jobname = 'fx-alert-dispatch-1605'", "fx-alert-dispatch-1605"),
+        ("select cron.unschedule('fx-alert-dispatch-1605')", "fx-alert-dispatch-1605"),
         ("drop function private.dispatch_check_rates()", "private.dispatch_check_rates()"),
     ],
 )

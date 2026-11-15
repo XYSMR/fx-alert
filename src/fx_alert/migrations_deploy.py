@@ -1,14 +1,18 @@
 """正式專案的 migration 部署（.github/workflows/deploy-migrations.yml 使用）。
 
-這個模組只做「讀」：比對紀錄、跑事前檢查、最後確認。真正寫入資料庫的兩件事交給 Supabase CLI：
-  * supabase migration repair --status applied：
-    補上「以前手動套用、但沒有紀錄」的版本（只寫紀錄，不執行）
-  * supabase db push：依序套用還沒套用的 migration，並寫入紀錄
-
 用法（連線字串放在環境變數 DB_URL，永遠不印出來）：
-    python -m fx_alert.migrations_deploy plan       # 算出要補紀錄、要套用的版本，寫到 GITHUB_OUTPUT
-    python -m fx_alert.migrations_deploy precheck   # 補紀錄前確認物件存在＋待套用版本的事前檢查
-    python -m fx_alert.migrations_deploy verify     # 套用後確認沒有遺漏
+    python -m fx_alert.migrations_deploy plan       # 算出要補紀錄、要套用的版本（只讀）
+    python -m fx_alert.migrations_deploy precheck   # 物件檢查＋事前檢查（只讀）
+    python -m fx_alert.migrations_deploy apply      # 補紀錄＋套用（唯一會寫入的指令）
+    python -m fx_alert.migrations_deploy verify     # 套用後確認沒有遺漏（只讀）
+
+apply 寫入的方式和 Supabase CLI 相同：紀錄寫在 supabase_migrations.schema_migrations
+（version、name、statements），之後用 CLI 的 migration list 等指令也看得懂。
+  * 補紀錄：所有版本在同一個交易裡寫入（只寫紀錄，不執行 SQL）
+  * 套用：每個 migration 一個交易，SQL 和紀錄一起 commit；失敗就整個 rollback，不會只套用一半
+  * 寫入前會重新比對計畫（必須和第 1 步相同），並在同一個連線上再跑一次物件檢查和事前檢查
+不用 Supabase CLI 寫入：supabase@3.0.0 的 --remote 無法解析正式專案的 Session pooler 連線字串
+（"failed to parse connection string"），而 psycopg 可以正常連線。
 
 事前檢查（precheck）
   supabase/prechecks/<版本>.sql 是一段 select，列出「不符合這個 migration 新限制」的資料。
@@ -40,6 +44,9 @@ BASELINE_FILE = ROOT / "supabase" / "migrations_baseline.txt"
 MIGRATION_FILE = re.compile(r"^(\d{14})_([a-z0-9_]+)\.sql$")
 VERSION = re.compile(r"^\d{14}$")
 PRECHECK_TIMEOUT = "30s"
+APPLY_LOCK_TIMEOUT = "30s"  # 等不到鎖就放棄，不要卡住排程或網站
+APPLY_STATEMENT_TIMEOUT = "5min"
+HISTORY_TABLE = "supabase_migrations.schema_migrations"
 
 
 class DeployError(Exception):
@@ -50,6 +57,20 @@ class DeployError(Exception):
 class Plan:
     repair: tuple[str, ...]  # 已經手動套用、要補紀錄的版本
     pending: tuple[str, ...]  # 要用 db push 套用的版本
+
+
+def migration_file(version: str, migrations_dir: Path = MIGRATIONS_DIR) -> Path:
+    matches = sorted(migrations_dir.glob(f"{version}_*.sql"))
+    if len(matches) != 1:
+        raise DeployError(f"找不到 {version} 的 migration 檔（或不只一個）")
+    return matches[0]
+
+
+def migration_name(path: Path) -> str:
+    m = MIGRATION_FILE.match(path.name)
+    if not m:
+        raise DeployError(f"migration 檔名格式不對：{path.name}")
+    return m.group(2)
 
 
 def local_versions(migrations_dir: Path = MIGRATIONS_DIR) -> list[str]:
@@ -171,7 +192,9 @@ def recorded_versions(conn) -> set[str]:
 
 def run_precheck(conn, sql: str) -> int:
     """在唯讀交易裡執行事前檢查，回傳不符合的列數（不回傳內容）。"""
+    conn.rollback()  # 從新的交易開始，才能設定唯讀
     with conn.cursor() as cur:
+        cur.execute("set transaction read only")
         cur.execute(f"set local statement_timeout = '{PRECHECK_TIMEOUT}'")
         cur.execute(sql)
         count = len(cur.fetchall()) if cur.description else 0
@@ -186,8 +209,10 @@ def run_object_check(conn, sql: str) -> list[str]:
     """
     import psycopg
 
+    conn.rollback()  # 從新的交易開始，才能設定唯讀
     try:
         with conn.cursor() as cur:
+            cur.execute("set transaction read only")
             cur.execute(f"set local statement_timeout = '{PRECHECK_TIMEOUT}'")
             cur.execute(sql)
             rows = cur.fetchall()
@@ -196,6 +221,88 @@ def run_object_check(conn, sql: str) -> list[str]:
         return [f"檢查查詢出錯：{str(exc).splitlines()[0]}"]
     conn.rollback()
     return failed_items(rows)
+
+
+def history_has_statements(conn) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "select exists (select 1 from information_schema.columns "
+            "where table_schema = 'supabase_migrations' and table_name = 'schema_migrations' "
+            "and column_name = 'statements')"
+        )
+        return bool(cur.fetchone()[0])
+
+
+def record_applied(conn, version: str, name: str, sql: str, *, with_statements: bool) -> None:
+    """寫一筆紀錄（不 commit）。statements 存整個檔案的內容（CLI 的 migration fetch 可以還原）。"""
+    with conn.cursor() as cur:
+        if with_statements:
+            cur.execute(
+                f"insert into {HISTORY_TABLE} (version, name, statements) values (%s, %s, %s)",
+                (version, name, [sql]),
+            )
+        else:
+            cur.execute(
+                f"insert into {HISTORY_TABLE} (version, name) values (%s, %s)", (version, name)
+            )
+
+
+def apply_migration(conn, version: str, name: str, sql: str, *, with_statements: bool) -> None:
+    """在目前的交易裡執行 migration 並寫紀錄（不 commit；呼叫端決定 commit 或 rollback）。"""
+    with conn.cursor() as cur:
+        cur.execute(f"set local lock_timeout = '{APPLY_LOCK_TIMEOUT}'")
+        cur.execute(f"set local statement_timeout = '{APPLY_STATEMENT_TIMEOUT}'")
+        cur.execute(sql)  # 沒有參數：一次送出整個檔案（含 do $$ 區塊）
+    record_applied(conn, version, name, sql, with_statements=with_statements)
+
+
+def run_checks(conn, plan: Plan) -> list[str]:
+    """物件檢查（要補紀錄的版本）＋事前檢查（待套用的版本）。回傳沒通過的版本，過程印在 log。"""
+    failed = []
+    # 1. 要補紀錄的版本：物件必須真的存在，否則不補（補了之後就永遠不會再套用）
+    for version in plan.repair:
+        path = baseline_check_path(version)
+        if path is None:
+            failed.append(version)
+            print(f"::error::{version}：沒有 supabase/baseline_checks/{version}_*.sql，不補紀錄")
+            continue
+        missing = run_object_check(conn, path.read_text(encoding="utf-8"))
+        if missing:
+            failed.append(version)
+            for item in missing:
+                why = item if item.startswith(("檢查查詢出錯", "（")) else f"{item} 不存在"
+                print(f"::error::{version}：{why}，不補紀錄")
+        else:
+            print(f"{version}：物件都存在，可以補紀錄")
+    # 2. 待套用的版本：資料要符合新限制
+    for version in plan.pending:
+        path = precheck_path(version)
+        if path is None:
+            print(f"{version}：沒有事前檢查")
+            continue
+        count = run_precheck(conn, path.read_text(encoding="utf-8"))
+        if count:
+            failed.append(version)
+            print(f"::error::{version}：有 {count} 列資料不符合新限制（{path.name}），不套用")
+        else:
+            print(f"{version}：事前檢查通過（0 列）")
+    return failed
+
+
+STOPPED_HINT = (
+    "已停止，資料庫沒有任何變更。物件不存在：先確認那個 migration 是否真的套用過；"
+    "資料不符合：在 SQL Editor 執行事前檢查 SQL 找出資料、修正後再重跑這個 workflow。"
+)
+
+
+def expected_plan() -> Plan | None:
+    """第 1 步算出的計畫（workflow 透過環境變數傳入）；沒有就回傳 None。"""
+    if "EXPECT_REPAIR" not in os.environ and "EXPECT_PENDING" not in os.environ:
+        return None
+    return Plan(
+        repair=tuple(os.environ.get("EXPECT_REPAIR", "").split()),
+        pending=tuple(os.environ.get("EXPECT_PENDING", "").split()),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -242,43 +349,66 @@ def cmd_plan() -> int:
 def cmd_precheck() -> int:
     url = db_url()
     with connect(url) as conn:
-        plan = _current_plan(conn)
-        failed = []
-        # 1. 要補紀錄的版本：物件必須真的存在，否則不補（補了之後就永遠不會再套用）
-        for version in plan.repair:
-            path = baseline_check_path(version)
-            if path is None:
-                failed.append(version)
-                print(
-                    f"::error::{version}：沒有 supabase/baseline_checks/{version}_*.sql，不補紀錄"
-                )
-                continue
-            missing = run_object_check(conn, path.read_text(encoding="utf-8"))
-            if missing:
-                failed.append(version)
-                for item in missing:
-                    why = item if item.startswith(("檢查查詢出錯", "（")) else f"{item} 不存在"
-                    print(f"::error::{version}：{why}，不補紀錄")
-            else:
-                print(f"{version}：物件都存在，可以補紀錄")
-        # 2. 待套用的版本：資料要符合新限制
-        for version in plan.pending:
-            path = precheck_path(version)
-            if path is None:
-                print(f"{version}：沒有事前檢查")
-                continue
-            count = run_precheck(conn, path.read_text(encoding="utf-8"))
-            if count:
-                failed.append(version)
-                print(f"::error::{version}：有 {count} 列資料不符合新限制（{path.name}），不套用")
-            else:
-                print(f"{version}：事前檢查通過（0 列）")
+        failed = run_checks(conn, _current_plan(conn))
     if failed:
-        print(
-            "已停止，資料庫沒有任何變更。物件不存在：先確認那個 migration 是否真的套用過；"
-            "資料不符合：在 SQL Editor 執行事前檢查 SQL 找出資料、修正後再重跑這個 workflow。"
-        )
+        print(STOPPED_HINT)
         return 1
+    return 0
+
+
+def cmd_apply() -> int:
+    """唯一會寫入的指令：補紀錄、依序套用。"""
+    url = db_url()
+    expected = expected_plan()
+    if expected is None and os.environ.get("GITHUB_ACTIONS") == "true":
+        raise DeployError("缺少 EXPECT_REPAIR／EXPECT_PENDING（第 1 步的計畫），不寫入")
+    with connect(url, read_only=False) as conn:
+        plan = _current_plan(conn)
+        conn.rollback()
+        if expected is not None and plan != expected:
+            raise DeployError(
+                "資料庫的紀錄和第 1 步看到的不同（可能同時有其他人在部署），不寫入；請重跑 workflow"
+            )
+        # 寫入前，在同一個連線上再確認一次
+        if run_checks(conn, plan):
+            print(STOPPED_HINT)
+            return 1
+        with_statements = history_has_statements(conn)
+        conn.rollback()
+
+        if plan.repair:
+            for version in plan.repair:
+                path = migration_file(version)
+                record_applied(
+                    conn,
+                    version,
+                    migration_name(path),
+                    path.read_text(encoding="utf-8"),
+                    with_statements=with_statements,
+                )
+            conn.commit()
+            print(f"補上紀錄：{' '.join(plan.repair)}（只寫紀錄，沒有執行 SQL）")
+
+        import psycopg
+
+        for version in plan.pending:
+            path = migration_file(version)
+            try:
+                apply_migration(
+                    conn,
+                    version,
+                    migration_name(path),
+                    path.read_text(encoding="utf-8"),
+                    with_statements=with_statements,
+                )
+                conn.commit()
+            except psycopg.Error as exc:
+                conn.rollback()
+                raise DeployError(
+                    f"{path.name} 套用失敗，這個 migration 已整個 rollback："
+                    f"{str(exc).splitlines()[0]}"
+                ) from None
+            print(f"套用：{path.name}")
     return 0
 
 
@@ -293,7 +423,7 @@ def cmd_verify() -> int:
     return 0
 
 
-COMMANDS = {"plan": cmd_plan, "precheck": cmd_precheck, "verify": cmd_verify}
+COMMANDS = {"plan": cmd_plan, "precheck": cmd_precheck, "apply": cmd_apply, "verify": cmd_verify}
 
 
 def main(argv: list[str] | None = None) -> int:

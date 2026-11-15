@@ -7,9 +7,13 @@ name: deploy-migrations
 #   1. plan      比對資料庫紀錄：哪些要補紀錄（以前手動套用過）、哪些要套用（只讀）
 #   2. precheck  要補紀錄的版本：supabase/baseline_checks/<版本>_*.sql 的物件都要存在（只讀）
 #                待套用的版本：supabase/prechecks/<版本>_*.sql 必須回傳 0 列（只讀）
-#   3. repair    補上手動套用過的版本紀錄（只寫紀錄，不執行 SQL）
-#   4. db push   依序套用 migration（Supabase CLI，每個 migration 一個交易）
-#   5. verify    確認 repo 裡的 migration 都已套用（只讀）
+#   3. apply     唯一會寫入的一步：再確認計畫沒變、再跑一次檢查 → 補紀錄 → 依序套用
+#                （每個 migration 一個交易，失敗就整個 rollback）
+#   4. verify    確認 repo 裡的 migration 都已套用（只讀）
+#
+# 寫入用 Python（psycopg），不用 Supabase CLI：supabase@3.0.0 的 --remote 無法解析
+# Session pooler 的連線字串（第一次執行時 "failed to parse connection string"）。
+# 紀錄格式和 CLI 相同（supabase_migrations.schema_migrations）。
 #
 # 連線字串只在需要的 step 透過 env 傳入，不放在 job 層級（安裝套件等步驟拿不到），也不印出來。
 
@@ -45,14 +49,8 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
       - name: Install
-        run: |
-          python -m pip install -e ".[db]"
-          npx --yes supabase@3.0.0 --version
+        run: python -m pip install -e ".[db]"
 
       - name: 1. 比對 migration 紀錄（只讀）
         id: plan
@@ -66,21 +64,16 @@ jobs:
           DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
         run: python -m fx_alert.migrations_deploy precheck
 
-      - name: 3. 補上手動套用過的版本紀錄
-        if: steps.plan.outputs.repair != ''
+      - name: 3. 補紀錄＋套用（唯一會寫入的一步）
+        if: steps.plan.outputs.repair != '' || steps.plan.outputs.pending != ''
         env:
           DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
-          REPAIR: ${{ steps.plan.outputs.repair }}
-        # REPAIR 只會是 14 位數字的版本號（migrations_deploy 驗證過），刻意不加引號讓它拆成多個參數
-        run: npx --yes supabase@3.0.0 migration repair --status applied $REPAIR --remote="$DB_URL" --yes
+          # 第 1 步的計畫：資料庫的紀錄如果在這之間變了，就不寫入
+          EXPECT_REPAIR: ${{ steps.plan.outputs.repair }}
+          EXPECT_PENDING: ${{ steps.plan.outputs.pending }}
+        run: python -m fx_alert.migrations_deploy apply
 
-      - name: 4. 套用 migration
-        if: steps.plan.outputs.pending != ''
-        env:
-          DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
-        run: npx --yes supabase@3.0.0 db push --remote="$DB_URL" --skip-vault --yes
-
-      - name: 5. 確認（只讀）
+      - name: 4. 確認（只讀）
         env:
           DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
         run: python -m fx_alert.migrations_deploy verify

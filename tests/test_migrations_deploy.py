@@ -97,7 +97,7 @@ def test_password_is_masked_in_actions_log(monkeypatch, capsys):
 
 
 def test_bad_command():
-    assert md.main(["apply"]) == 2
+    assert md.main(["push"]) == 2
 
 
 class _FakeCursor:
@@ -167,3 +167,33 @@ def test_failed_items():
     assert md.failed_items([("a", True), ("b", True)]) == []
     assert md.failed_items([("a", True), ("cron job x", False), ("c", None)]) == ["cron job x", "c"]
     assert md.failed_items([]) == ["（檢查沒有回傳任何一列）"]  # 沒有結果不能當作通過
+
+
+# ---------- apply ----------
+
+
+def test_migration_file_and_name():
+    path = md.migration_file("20261116000000")
+    assert path.name == "20261116000000_currency_catalog.sql"
+    assert md.migration_name(path) == "currency_catalog"
+    with pytest.raises(DeployError, match="找不到"):
+        md.migration_file("29991231000000")
+
+
+def test_expected_plan_from_workflow(monkeypatch):
+    monkeypatch.delenv("EXPECT_REPAIR", raising=False)
+    monkeypatch.delenv("EXPECT_PENDING", raising=False)
+    assert md.expected_plan() is None
+    monkeypatch.setenv("EXPECT_REPAIR", "20261110020000 20261111000000")
+    monkeypatch.setenv("EXPECT_PENDING", "")
+    assert md.expected_plan() == Plan(("20261110020000", "20261111000000"), ())
+
+
+def test_apply_on_actions_requires_the_plan(monkeypatch, capsys):
+    """在 Actions 上沒有第 1 步的計畫就不寫入（避免手動跑 apply 跳過檢查）。"""
+    monkeypatch.setenv("DB_URL", "postgresql://u:p@127.0.0.1:1/x")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("EXPECT_REPAIR", raising=False)
+    monkeypatch.delenv("EXPECT_PENDING", raising=False)
+    assert md.main(["apply"]) == 1
+    assert "第 1 步的計畫" in capsys.readouterr().out

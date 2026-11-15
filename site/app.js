@@ -241,6 +241,52 @@ function nextCheck(hours, now = new Date()) {
   return firstText;
 }
 
+/** 分鐘數 → "16:05" */
+function hhmm(minutes) {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+/**
+ * 「多久檢查一次」的說明。到價判斷只看每次檢查當下的牌告，
+ * 兩次檢查之間短暫跌到目標又回升，就不會通知（讓使用者知道，不要誤會漏寄）。
+ */
+function scheduleText(hours) {
+  const every = (hours && hours.interval_minutes) || 30;
+  let when = `每 ${every} 分鐘檢查一次牌告`;
+  if (hours && (hours.first_check || hours.start) && hours.end) {
+    const first = toMinutes(hours.first_check || hours.start);
+    const last = first + Math.floor((toMinutes(hours.end) - first) / every) * every;
+    when = `${hours.weekdays_only ? "平日" : "每天"} ${hhmm(first)}–${hhmm(last)} 每 ${every} 分鐘檢查一次牌告`;
+  }
+  return `${when}。到價判斷看的是檢查當下的價格：匯率如果在兩次檢查之間短暫跌到目標又回升，不會通知。`;
+}
+
+/**
+ * 登入後最上面的「我的提醒」摘要：有目標價的幣別，已到價的排前面，其餘依距離目標由近到遠。
+ * 每一列的徽章、說明和卡片（cardView）一致。
+ */
+function homeRows(list) {
+  const rank = (r) => (r.tone === "good" ? 0 : r.paused ? 3 : r.badge === "已通知" ? 1 : 2);
+  return list
+    .filter((c) => c.target !== null && c.target !== undefined)
+    .map((c) => {
+      const v = cardView(c);
+      return {
+        code: c.code,
+        label: `${c.name} ${c.code}`,
+        rate: c.rate ?? "—",
+        target: c.target,
+        badge: v.badge,
+        tone: v.tone,
+        message: v.message,
+        paused: Boolean(c.paused),
+        distance: typeof c.distance_pct === "number" ? c.distance_pct : Infinity,
+      };
+    })
+    .sort((a, b) => rank(a) - rank(b) || a.distance - b.distance)
+    .map(({ distance, ...row }) => row);
+}
+
 /**
  * 資料是不是「太久沒更新」？只在檢查時段內判斷：
  * 從「今天開始檢查」和「最後一次檢查」中較晚的那個算起，超過 2 小時才算。
@@ -496,7 +542,13 @@ function renderCard(c) {
   const hasTarget = c.target !== null && c.target !== undefined;
   if (hasTarget) card.append(el("p", { class: "target" }, "你的目標 ", el("b", {}, c.target)));
   if (v.message) card.append(el("p", { class: `message tone-${v.tone}` }, v.message));
-  if (!hasTarget && cardHint) card.append(el("p", { class: "message" }, cardHint));
+  if (!hasTarget && loggedInNow) {
+    const add = el("button", { type: "button", class: "primary" }, `為${c.name}設定提醒`);
+    add.addEventListener("click", () => askAddRule(c.code));
+    card.append(el("p", { class: "message" }, add));
+  } else if (!hasTarget && cardHint) {
+    card.append(el("p", { class: "message" }, cardHint));
+  }
   if (v.details.length) {
     card.append(el("details", {},
       el("summary", {}, "詳細資訊"),
@@ -793,6 +845,8 @@ function renderSelected() {
   setupConverter(c);
   showChart(c);
   renderOverview();
+  renderHome();
+  document.dispatchEvent(new CustomEvent("fx:selected", { detail: { code: selectedCode } }));
 }
 
 function selectCurrency(code) {
@@ -802,6 +856,38 @@ function selectCurrency(code) {
   saveCurrency(code);
   if (location.hash.replace(/^#/, "") !== code) history.replaceState(null, "", `#${code}`);
   renderSelected();
+}
+
+let loggedInNow = false;
+let scheduleHint = scheduleText(null);
+
+/** 登入後的首頁摘要：我的提醒一覽；沒有提醒時引導去設定 */
+function renderHome() {
+  const box = $("my-home");
+  box.hidden = !loggedInNow;
+  if (!loggedInNow) return;
+  const rows = homeRows(currentList);
+  const list = $("my-home-list");
+  $("my-home-empty").hidden = rows.length > 0;
+  list.hidden = rows.length === 0;
+  list.replaceChildren(...rows.map((r) => {
+    const btn = el("button", { type: "button", class: "home-row" + (r.code === selectedCode ? " current" : "") },
+      el("span", { class: "home-name" }, r.label),
+      el("span", { class: "home-rate" }, "現在 ", el("b", {}, r.rate), "・目標 ", el("b", {}, r.target)),
+      r.badge ? el("span", { class: `badge tone-${r.tone}` }, r.badge) : null,
+      r.message ? el("span", { class: "home-msg" }, r.message) : null);
+    btn.addEventListener("click", () => {
+      selectCurrency(r.code);
+      $("cards").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return el("li", {}, btn);
+  }));
+  $("my-home-schedule").textContent = scheduleHint;
+}
+
+/** 請 account.js 打開「新增提醒」並選好幣別 */
+function askAddRule(code) {
+  document.dispatchEvent(new CustomEvent("fx:add-rule", { detail: { code } }));
 }
 
 /** 依目前的幣別資料重畫（登入／登出、修改目標價後都會呼叫） */
@@ -843,6 +929,7 @@ async function main() {
     : "";
   window.addEventListener("hashchange", () => selectCurrency(location.hash.replace(/^#/, "").toUpperCase()));
   $("generated-at").textContent = formatTime(data.generated_at);
+  scheduleHint = scheduleText(data.business_hours);
 
   if (plan.targetsFromDataJson && !forcePublic) {
     // 登入功能關閉：和單人版完全一樣
@@ -862,7 +949,8 @@ async function main() {
   renderCurrencies(publicList);
   if (window.FxAccount && plan.auth) {
     window.FxAccount.start(plan.auth, publicList, (personal, loggedIn) => {
-      cardHint = loggedIn ? "在下方「我的提醒」設定目標價" : "登入後可以設定目標價，到價時寄 Email 給你";
+      loggedInNow = loggedIn;
+      cardHint = loggedIn ? null : "登入後可以設定目標價，到價時寄 Email 給你";
       converterHint = loggedIn ? null : "登入後可以比較目標價";
       renderCurrencies(personal);
     });
@@ -873,12 +961,12 @@ async function main() {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     dataUrl, previewNow, previewPublic, formatTime, formatDate, timeAgo, formatPct, unitHint, cardView,
-    currencyGroups, pickCurrency, taipeiIso, decodeHistory, overviewRows,
+    currencyGroups, pickCurrency, taipeiIso, decodeHistory, overviewRows, scheduleText, homeRows,
     toMinutes, inCheckHours, nextCheck, isStale, statusLine, parseAmount, converterView,
     yRange, formatChange, periodChange, historyWindow, timeTicks, tickLabel,
     markerIndexes, chartSummary, bootPlan, publicCurrencies,
   };
 } else {
-  window.FxApp = { formatTime };
+  window.FxApp = { formatTime, scheduleHint: () => scheduleHint };
   main();
 }

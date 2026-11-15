@@ -21,7 +21,8 @@
     "weekdays_only": true,
     "start": "09:00",
     "end": "16:30",
-    "first_check": "09:05"
+    "first_check": "09:05",
+    "interval_minutes": 30
   },
   "currencies": [
     {
@@ -109,7 +110,7 @@
       "popular_rank": null,
       "rate": "22.6996",
       "rate_at": "2026-11-09T16:10:12+08:00",
-      "change_pct": -0.0,
+      "change_pct": 0.0,
       "high": {
         "rate": "23.1489",
         "at": "2026-10-21T09:05:00+08:00"

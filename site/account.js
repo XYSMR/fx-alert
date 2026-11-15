@@ -124,6 +124,62 @@ function availableCurrencies(currencies, rules) {
   return currencies.filter((c) => !used.has(c.code)).map((c) => ({ code: c.code, name: c.name }));
 }
 
+/**
+ * 新增提醒的幣別選單（分組）：常用（popular_rank）→ 其他（兆豐牌告順序），已經設定過的不列。
+ * 選項文字和上方下拉選單一樣：「日圓 JPY」。
+ */
+function addOptions(currencies, rules) {
+  const used = new Set(rules.map((r) => r.currency));
+  const left = currencies.filter((c) => !used.has(c.code));
+  const opt = (c) => ({ code: c.code, label: `${c.name} ${c.code}` });
+  const popular = left.filter((c) => c.popular_rank).sort((a, b) => a.popular_rank - b.popular_rank);
+  const others = left.filter((c) => !c.popular_rank).sort((a, b) => (a.sort_order ?? 99) - (b.sort_order ?? 99));
+  return [["常用", popular], ["其他", others]]
+    .filter(([, items]) => items.length)
+    .map(([label, items]) => ({ label, options: items.map(opt) }));
+}
+
+/** 新增提醒預設選哪個幣別：正在看的幣別（還沒設定過的話），否則第一個 */
+function defaultAddCode(groups, viewing) {
+  const codes = groups.flatMap((g) => g.options.map((o) => o.code));
+  return codes.includes(viewing) ? viewing : codes[0] ?? null;
+}
+
+/** 規則依兆豐牌告順序排（和下拉選單、全部幣別一覽一致） */
+function sortRules(rules, currencies) {
+  const order = Object.fromEntries(currencies.map((c) => [c.code, c.sort_order ?? 99]));
+  return [...rules].sort((a, b) => (order[a.currency] ?? 99) - (order[b.currency] ?? 99) ||
+    String(a.currency).localeCompare(String(b.currency)));
+}
+
+/**
+ * 目標價的建議值（輸入框的 placeholder）：比現價低約 2%，對齊報價單位，至少比現價低一格。
+ * 匯率 ≥ 1 時取到小數 2 位，比較好讀（美元 33.3673 → 32.69）。
+ * 越南盾 0.0015 → 0.0014；日圓 0.2119 → 0.2076。
+ */
+function suggestTarget(rate) {
+  const r = parseDec(rate);
+  if (r === null || r <= 0n) return null;
+  const step = r >= SCALE ? SCALE / 100n : TICK;
+  let t = ((r * 98n) / 100n / step) * step;
+  if (t >= r) t = r - TICK;
+  return t > 0n ? formatPrice(t) : null;
+}
+
+/**
+ * 越南盾、印尼盾這種很小的匯率：一個報價單位 0.0001 就佔現價好幾 %，目標價只能一格一格設。
+ * 一格 ≥ 現價的 1% 時回傳說明，其他幣別回傳 null。
+ */
+function tickHint(rate, name) {
+  const r = parseDec(rate);
+  if (r === null || r <= 0n) return null;
+  const pct = (Number(TICK) / Number(r)) * 100;
+  if (pct < 1) return null;
+  const steps = [r - 2n * TICK, r - TICK, r].filter((v) => v > 0n).map(formatPrice);
+  return `${name}的牌告只到小數第 4 位，每跳一格（0.0001）約 ${pct.toFixed(1)}%，` +
+    `目標價只能設成 ${steps.join("、")} 這樣的數字。`;
+}
+
 /** 距離目標還要跌幾 %（除以現價），四捨五入到小數 3 位；和 Python 的 build-site 一樣 */
 function distancePct(rate, targetMicros) {
   const r = parseDec(rate);
@@ -211,6 +267,7 @@ let config = null;
 let state = { session: null, profile: null, rules: [], notifications: [] };
 let publicList = [];
 let notify = () => {};
+let viewing = null; // 上方下拉選單正在看的幣別（app.js 的 fx:selected）
 
 const byId = (id) => document.getElementById(id);
 
@@ -382,13 +439,13 @@ function ruleRow(rule) {
   const name = NAMES[rule.currency] ?? rule.currency;
   const decimals = decimalsOf(rateOf(rule.currency));
   const target = h("input", {
-    type: "text", inputmode: "decimal", value: formatDec(parseDec(rule.target)),
+    type: "text", inputmode: "decimal", value: formatPrice(parseDec(rule.target)),
     "aria-label": `${name}的目標價`, autocomplete: "off",
   });
   const enabled = h("input", { type: "checkbox", checked: rule.enabled !== false });
   const buffer = h("input", {
     type: "text", inputmode: "decimal", autocomplete: "off",
-    value: rule.buffer === null ? "" : formatDec(parseDec(rule.buffer)),
+    value: rule.buffer === null ? "" : formatPrice(parseDec(rule.buffer)),
     placeholder: "留空 = 目標價的 0.5%", "aria-label": `${name}的回升門檻`,
   });
   const rearm = h("p", { class: "hint rearm" });
@@ -425,12 +482,14 @@ function ruleRow(rule) {
     await refresh();
   };
 
-  return h("form", { class: "rule", onsubmit: save },
+  return h("form", { class: "rule", onsubmit: save, "data-currency": rule.currency },
     h("div", { class: "rule-main" },
-      h("strong", { class: "rule-name" }, name),
+      h("strong", { class: "rule-name" }, `${name} ${rule.currency}`),
       h("label", { class: "field" }, h("span", {}, "你的目標"), target),
       h("label", { class: "check" }, enabled, h("span", {}, "啟用"))),
-    h("p", { class: "hint" }, "狀態：", ruleStatusText(rule, state.profile)),
+    h("p", { class: "hint" }, "狀態：", ruleStatusText(rule, state.profile),
+      rateOf(rule.currency) ? `・現在 ${rateOf(rule.currency)}` : ""),
+    tickHint(rateOf(rule.currency), name) ? h("p", { class: "hint tick-hint" }, tickHint(rateOf(rule.currency), name)) : null,
     h("details", { class: "advanced" },
       h("summary", {}, "進階設定"),
       h("label", { class: "field" }, h("span", {}, "回升門檻"), buffer),
@@ -441,14 +500,30 @@ function ruleRow(rule) {
 }
 
 function addForm() {
-  const options = availableCurrencies(publicList, state.rules);
-  if (!options.length) return h("p", { class: "hint" }, "每個幣別都已經設定提醒了。");
-  const select = h("select", { "aria-label": "幣別" },
-    ...options.map((o) => h("option", { value: o.code }, o.name)));
+  const groups = addOptions(publicList, state.rules);
+  if (!groups.length) return h("p", { class: "hint" }, "每個幣別都已經設定提醒了。");
+  const select = h("select", { "aria-label": "幣別", id: "add-currency" },
+    ...groups.map((g) => h("optgroup", { label: g.label },
+      ...g.options.map((o) => h("option", { value: o.code }, o.label)))));
+  select.value = defaultAddCode(groups, viewing);
   const target = h("input", {
-    type: "text", inputmode: "decimal", autocomplete: "off", placeholder: "例如 0.205",
-    "aria-label": "目標價",
+    type: "text", inputmode: "decimal", autocomplete: "off", id: "add-target",
+    "aria-label": "目標價", "aria-describedby": "add-hint",
   });
+  const hint = h("p", { class: "hint", id: "add-hint" });
+  const updateHint = () => {
+    const code = select.value;
+    const name = NAMES[code] ?? code;
+    const rate = rateOf(code);
+    const suggest = suggestTarget(rate);
+    target.placeholder = suggest ? `例如 ${suggest}` : "";
+    const tick = tickHint(rate, name);
+    hint.replaceChildren(
+      rate ? `${name}現在 ${rate}。匯率跌到你的目標或更低時，會寄一封 Email 給你。` : "",
+      tick ? h("span", { class: "tick-hint" }, ` ${tick}`) : "");
+  };
+  select.addEventListener("change", updateHint);
+  updateHint();
   const add = async (event) => {
     event.preventDefault();
     const t = validateTarget(target.value);
@@ -460,11 +535,31 @@ function addForm() {
     say(`已新增${NAMES[select.value] ?? select.value}的提醒`);
     await refresh();
   };
-  return h("form", { class: "rule add", onsubmit: add },
+  return h("form", { class: "rule add", id: "add-form", onsubmit: add },
     h("strong", {}, "＋ 新增提醒"),
     h("label", { class: "field" }, h("span", {}, "幣別"), select),
     h("label", { class: "field" }, h("span", {}, "你的目標"), target),
+    hint,
     h("button", { type: "submit", class: "primary" }, "新增"));
+}
+
+/** 卡片上的「為○○設定提醒」：已經有提醒就跳到那一列，沒有就選好幣別、跳到新增表單 */
+function openAddRule(code) {
+  const section = byId("my-rules");
+  if (!section || section.hidden) return;
+  const existing = section.querySelector(`form.rule[data-currency="${code}"] input[type="text"]`);
+  const select = byId("add-currency");
+  let focus = existing;
+  if (!focus && select) {
+    if ([...select.options].some((o) => o.value === code)) {
+      select.value = code;
+      select.dispatchEvent(new Event("change"));
+    }
+    focus = byId("add-target");
+  }
+  if (!focus) return;
+  focus.scrollIntoView({ behavior: "smooth", block: "center" });
+  focus.focus({ preventScroll: true });
 }
 
 function deleteSection() {
@@ -526,9 +621,11 @@ function deleteSection() {
 
 function renderRules() {
   byId("my-rules").hidden = false;
+  const schedule = window.FxApp && window.FxApp.scheduleHint ? window.FxApp.scheduleHint() : "";
   byId("my-rules-body").replaceChildren(
     renderEmailSwitch(),
-    ...state.rules.map(ruleRow),
+    schedule ? h("p", { class: "hint" }, schedule) : null,
+    ...sortRules(state.rules, publicList).map(ruleRow),
     addForm(),
     h("h3", { class: "section-title" }, "帳號"),
     deleteSection(),
@@ -554,6 +651,10 @@ function renderNotifications() {
 async function start(auth, currencies, onChange) {
   publicList = currencies;
   notify = onChange;
+  document.addEventListener("fx:selected", (e) => {
+    viewing = e.detail.code;
+  });
+  document.addEventListener("fx:add-rule", (e) => openAddRule(e.detail.code));
   for (const c of currencies) NAMES[c.code] = c.name;
   try {
     await loadScript("vendor/supabase.umd.js");
@@ -583,6 +684,7 @@ if (typeof module !== "undefined" && module.exports) {
     parseDec, formatDec, formatPrice, decimalsOf, autoBuffer, maxBuffer, effectiveBuffer,
     rearmQuote, rearmText,
     validateTarget, validateBuffer, farFromRateMessage, availableCurrencies, distancePct,
+    addOptions, defaultAddCode, sortRules, suggestTarget, tickHint,
     personalCurrencies, ruleStatusText, errorMessage, normalizeConfirm, isConfirmed,
     isAccountGone, deleteErrorMessage, CONFIRM_TEXT,
   };

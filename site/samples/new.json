@@ -21,7 +21,8 @@
     "weekdays_only": true,
     "start": "09:00",
     "end": "16:30",
-    "first_check": "09:05"
+    "first_check": "09:05",
+    "interval_minutes": 30
   },
   "currencies": [
     {

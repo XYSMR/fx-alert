@@ -98,6 +98,7 @@ def test_build_data_full(cfg):
         "start": "09:00",
         "end": "16:30",
         "first_check": "09:05",
+        "interval_minutes": 30,
     }
     assert data["history_days"] == 30
     assert data["history_since"] == "2026-10-01T09:05:00+08:00"  # 最早一筆（就算超過 30 天）
@@ -279,13 +280,14 @@ def test_first_check_matches_pg_cron_schedule():
     """主要排程是 pg_cron（:05、:35），GitHub schedule（:07、:37）只是備援。"""
     from pathlib import Path
 
-    from fx_alert.build_site import SCHEDULE_OFFSET_MINUTES
+    from fx_alert.build_site import SCHEDULE_INTERVAL_MINUTES, SCHEDULE_OFFSET_MINUTES
 
     root = Path(__file__).resolve().parents[1]
     sql = (root / "supabase/migrations/20261110020000_dispatch_check_rates.sql").read_text(
         encoding="utf-8"
     )
     assert SCHEDULE_OFFSET_MINUTES == 5
+    assert SCHEDULE_INTERVAL_MINUTES == 30
     assert f"'{SCHEDULE_OFFSET_MINUTES},{SCHEDULE_OFFSET_MINUTES + 30} 1-7 * * 1-5'" in sql
     assert f"'{SCHEDULE_OFFSET_MINUTES} 8 * * 1-5'" in sql  # 16:05
 

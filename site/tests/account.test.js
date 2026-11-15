@@ -183,3 +183,60 @@ test("isAccountGone：讀不到自己的 profile、或寫入時外鍵錯誤，�
   assert.equal(a.isAccountGone(null), false);
   assert.equal(a.errorMessage({ code: "23503" }), "帳號已不存在，請重新登入");
 });
+
+// ---------- 我的提醒首頁、任何幣別都能設定 ----------
+
+const SAMPLE = app.publicCurrencies(require("../samples/waiting.json").currencies);
+
+test("addOptions：常用 → 其他，已設定的幣別不列；預設選正在看的幣別", () => {
+  const groups = a.addOptions(SAMPLE, [{ currency: "JPY" }, { currency: "VND" }]);
+  assert.deepEqual(groups.map((g) => g.label), ["常用", "其他"]);
+  assert.deepEqual(groups[0].options.map((o) => o.code), ["KRW", "USD", "EUR", "CNY", "HKD", "THB", "SGD"]);
+  const all = groups.flatMap((g) => g.options.map((o) => o.code));
+  assert.equal(all.length, 16); // 18 種扣掉已設定的 2 種：任何幣別都能設定
+  assert.ok(!all.includes("JPY") && !all.includes("VND"));
+  assert.equal(groups[1].options[0].label, "英鎊 GBP");
+  assert.equal(a.defaultAddCode(groups, "IDR"), "IDR");
+  assert.equal(a.defaultAddCode(groups, "JPY"), "KRW"); // 正在看的已經設定過 → 第一個
+  assert.equal(a.defaultAddCode([], "JPY"), null);
+});
+
+test("sortRules：依兆豐牌告順序", () => {
+  const rules = [{ currency: "VND" }, { currency: "JPY" }, { currency: "USD" }];
+  assert.deepEqual(a.sortRules(rules, SAMPLE).map((r) => r.currency), ["USD", "JPY", "VND"]);
+});
+
+test("suggestTarget：比現價低約 2%，對齊 0.0001，至少低一格", () => {
+  assert.equal(a.suggestTarget("0.2119"), "0.2076");
+  assert.equal(a.suggestTarget("0.0263"), "0.0257");
+  assert.equal(a.suggestTarget("0.0015"), "0.0014"); // 越南盾
+  assert.equal(a.suggestTarget("0.0021"), "0.0020"); // 印尼盾
+  assert.equal(a.suggestTarget("33.1400"), "32.4700"); // ≥ 1 取到小數 2 位
+  assert.equal(a.suggestTarget("33.3673"), "32.6900");
+  assert.equal(a.suggestTarget("1.0457"), "1.0200");
+  assert.equal(a.suggestTarget("0.0001"), null);
+  assert.equal(a.suggestTarget(null), null);
+  for (const c of SAMPLE) {
+    const s = a.suggestTarget(c.rate);
+    assert.equal(a.validateTarget(s).error, undefined, `${c.code} ${s}`); // 建議值一定能直接存
+  }
+});
+
+test("tickHint：越南盾、印尼盾說明一格有多大，其他幣別不顯示", () => {
+  assert.equal(a.tickHint("0.0015", "越南盾"),
+    "越南盾的牌告只到小數第 4 位，每跳一格（0.0001）約 6.7%，目標價只能設成 0.0013、0.0014、0.0015 這樣的數字。");
+  assert.match(a.tickHint("0.0021", "印尼盾"), /約 4\.8%/);
+  assert.equal(a.tickHint("0.0263", "韓元"), null);
+  assert.equal(a.tickHint("0.2119", "日圓"), null);
+  assert.equal(a.tickHint(null, "越南盾"), null);
+  // 提示裡的價格都是 4 位小數，不會出現 0.0015075 這種數字
+  for (const n of a.tickHint("0.0015", "越南盾").match(/0\.\d+/g)) assert.match(n, /^0\.\d{4}$/);
+});
+
+test("越南盾提醒的卡片：目標、回升門檻都是 4 位小數", () => {
+  const vnd = SAMPLE.find((c) => c.code === "VND");
+  const [card] = a.personalCurrencies([vnd], [{ currency: "VND", target: "0.0014", buffer: null, state: "armed" }], {});
+  assert.equal(card.target, "0.0014");
+  assert.equal(card.rearm_above, "0.0015");
+  assert.ok(!JSON.stringify(card).includes("0.00150"));
+});

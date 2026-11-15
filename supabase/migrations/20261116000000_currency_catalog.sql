@@ -3,11 +3,8 @@
 -- 內容和 src/fx_alert/currencies.py 一致（tests/db/test_currency_catalog.py 會比對）。
 -- 南非幣 ZAR、瑞典幣 SEK 兆豐只有即期匯率，不支援。
 --
--- 套用前先在 SQL Editor 確認既有規則都符合新的限制（應該回傳 0 列；有資料就先修正，否則整個 migration 會失敗、什麼都不改）：
---   select id, currency, target, buffer from public.alert_rules
---   where target <> round(target, 4)
---      or (buffer is not null and (buffer < 0.0001 or buffer <> round(buffer, 4)
---                                  or buffer > greatest(target * 0.1, 0.0001)));
+-- 套用前的事前檢查在 supabase/prechecks/20261116000000_currency_catalog.sql：
+-- 列出不符合新限制的規則，應該回傳 0 列（有資料就先修正，否則整個 migration 會失敗、什麼都不改）。
 
 -- ---------------------------------------------------------------------------
 -- 1. currencies：18 種幣別、牌告順序、下拉選單「常用」的順序

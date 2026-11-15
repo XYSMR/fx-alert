@@ -23,6 +23,17 @@
   </header>
 
   <main>
+    <!-- 登入後的首頁摘要（app.js renderHome）：我的提醒一覽，點一列切換到那個幣別 -->
+    <section class="panel home" id="my-home" aria-labelledby="my-home-title" hidden>
+      <div class="panel-head">
+        <h2 id="my-home-title">我的提醒</h2>
+        <a class="link" href="#my-rules" id="my-home-edit">設定提醒</a>
+      </div>
+      <ul class="home-list" id="my-home-list"></ul>
+      <p class="empty" id="my-home-empty" hidden>還沒有設定提醒。在下面選一個幣別，按「設定提醒」輸入目標價，到價時會寄 Email 給你。</p>
+      <p class="hint" id="my-home-schedule"></p>
+    </section>
+
     <section class="picker" aria-label="選擇幣別">
       <label for="currency">幣別</label>
       <!-- 卡片、換匯試算、走勢圖都跟著這裡選的幣別；網址 #JPY 可以直接分享 -->
@@ -86,7 +97,7 @@
 
     <!-- 登入後才出現：我的提醒、我的通知紀錄（account.js） -->
     <section class="panel" id="my-rules" aria-labelledby="my-rules-title" hidden>
-      <h2 id="my-rules-title">我的提醒</h2>
+      <h2 id="my-rules-title">設定提醒</h2>
       <div id="my-rules-body"></div>
       <p class="form-status" id="my-rules-status" role="status" aria-live="polite"></p>
     </section>

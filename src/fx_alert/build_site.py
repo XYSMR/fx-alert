@@ -49,6 +49,8 @@ def _iso(dt: datetime) -> str:
 # GitHub schedule 的 :07、:37 只是備援），前端用來顯示「下次更新：週一 09:05」。
 # tests/test_build_site.py 會檢查和 migration 一致。
 SCHEDULE_OFFSET_MINUTES = 5
+# 檢查間隔（:05、:35）。前端用來說明「兩次檢查之間短暫到價又回升，不會通知」
+SCHEDULE_INTERVAL_MINUTES = 30
 
 
 def distance_pct(rate: Decimal, target: Decimal) -> float:
@@ -198,6 +200,7 @@ def build_data(
             "start": f"{cfg.hours.start:%H:%M}",
             "end": f"{cfg.hours.end:%H:%M}",
             "first_check": f"{_add_minutes(cfg.hours.start, SCHEDULE_OFFSET_MINUTES):%H:%M}",
+            "interval_minutes": SCHEDULE_INTERVAL_MINUTES,
         },
         "currencies": currencies,
         # 兆豐只有即期匯率、不支援的幣別（網頁下拉選單下方註明）

@@ -468,3 +468,32 @@ test("yRange：越南盾、印尼盾這種很小的匯率，刻度不小於 0.00
     assert.ok(r.min < Number(rate) && r.max > Number(rate));
   }
 });
+
+// ---------- 登入後的首頁 ----------
+
+test("scheduleText：檢查時段、間隔，並說明兩次檢查之間的到價不會通知", () => {
+  const hours = { weekdays_only: true, start: "09:00", end: "16:30", first_check: "09:05", interval_minutes: 30 };
+  assert.equal(app.scheduleText(hours),
+    "平日 09:05–16:05 每 30 分鐘檢查一次牌告。到價判斷看的是檢查當下的價格：匯率如果在兩次檢查之間短暫跌到目標又回升，不會通知。");
+  // 之後改成 24 小時（第 6 個 PR）也能用
+  assert.match(app.scheduleText({ weekdays_only: false, start: "00:00", end: "23:59", first_check: "00:05", interval_minutes: 30 }),
+    /^每天 00:05–23:35 每 30 分鐘/);
+  assert.match(app.scheduleText(null), /^每 30 分鐘檢查一次牌告。/);
+});
+
+test("homeRows：只列有目標價的幣別，已到價排最前，其餘依距離由近到遠", () => {
+  const base = { rate_at: null, status_since: null, rearm_above: "0.3000", paused: null };
+  const rows = app.homeRows([
+    { ...base, code: "USD", name: "美元", rate: "33.0000", target: null },
+    { ...base, code: "JPY", name: "日圓", rate: "0.2119", target: "0.2000", status: "waiting", distance_pct: 5.6 },
+    { ...base, code: "KRW", name: "韓元", rate: "0.0263", target: "0.0260", status: "waiting", distance_pct: 1.1 },
+    { ...base, code: "VND", name: "越南盾", rate: "0.0015", target: "0.0015", status: "waiting", distance_pct: 0 },
+    { ...base, code: "THB", name: "泰銖", rate: "1.0400", target: "1.0000", status: "waiting", distance_pct: 3.8, paused: "rule" },
+  ]);
+  assert.deepEqual(rows.map((r) => r.code), ["VND", "KRW", "JPY", "THB"]);
+  assert.equal(rows[0].badge, "已到價");
+  assert.equal(rows[0].label, "越南盾 VND");
+  assert.equal(rows[1].message, "還要再跌 1.1% 才會通知你");
+  assert.equal(rows[3].badge, "已停用");
+  assert.deepEqual(app.homeRows([{ code: "USD", name: "美元", rate: "33.0000", target: null }]), []);
+});

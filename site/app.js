@@ -316,6 +316,58 @@ function statusLine(data, now = new Date()) {
   return { tone: "ok", text: `✓ 資料正常・${when} 更新（${timeAgo(lc.at, now)}）`, link: false };
 }
 
+// ---------- 最後檢查時間：Supabase 的 check_status，讀不到就用 data.json ----------
+
+/**
+ * Supabase check_status 的回應（[{checked_at, ok, errors}]）→ 和 data.json 的 last_check 一樣的格式。
+ * 格式不對（空的、錯誤訊息、時間讀不懂）回傳 null。
+ */
+function checkStatusRecord(rows) {
+  if (!Array.isArray(rows) || rows.length !== 1 || !rows[0] || typeof rows[0] !== "object") return null;
+  const { checked_at: at, ok, errors } = rows[0];
+  if (typeof at !== "string" || Number.isNaN(Date.parse(at)) || typeof ok !== "boolean") return null;
+  return { at, ok, errors: Number.isInteger(errors) ? errors : 0 };
+}
+
+/**
+ * Supabase 讀不到時（專案暫停、網路問題、還沒套用 migration）的退回方案：
+ * 用 data.json 的產生時間當「最後更新」，成功與否沿用 data.json 的 last_check。
+ * 只要 data.json 讀得到，狀態列就一定有內容，不會顯示 Supabase 的錯誤或留白。
+ */
+function fallbackLastCheck(data) {
+  const lc = data && data.last_check;
+  if (!data || !data.generated_at || Number.isNaN(Date.parse(data.generated_at))) return lc ?? null;
+  return { at: data.generated_at, ok: !(lc && lc.ok === false), errors: (lc && lc.errors) || 0 };
+}
+
+/** 狀態列用哪一份紀錄：兩份都有就用比較新的（Supabase 每次檢查都更新，data.json 只在資料有變時） */
+function statusRecord(remote, data) {
+  const local = fallbackLastCheck(data);
+  if (!remote) return local;
+  if (!local) return remote;
+  return Date.parse(remote.at) >= Date.parse(local.at) ? remote : local;
+}
+
+/** 用 publishable key 讀 check_status（公開資訊）。任何錯誤、逾時都回傳 null，不丟例外 */
+async function fetchCheckStatus(auth, { timeoutMs = 4000, fetchFn = globalThis.fetch } = {}) {
+  if (!auth || !auth.url || !auth.key || typeof fetchFn !== "function") return null;
+  const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  try {
+    const res = await fetchFn(`${auth.url}/rest/v1/check_status?select=checked_at,ok,errors&id=eq.1`, {
+      headers: { apikey: auth.key },
+      cache: "no-store",
+      signal: ctrl ? ctrl.signal : undefined,
+    });
+    if (!res.ok) return null;
+    return checkStatusRecord(await res.json());
+  } catch {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** 使用者輸入的台幣金額 → 數字；不合法回傳 null。允許逗號和空白 */
 function parseAmount(text) {
   const s = String(text ?? "").replace(/[,\s，]/g, "");
@@ -918,7 +970,13 @@ async function main() {
     showError("data.json 格式不符，請重新執行 build-site。");
     return;
   }
-  renderStatus(data, now);
+  // 先用 data.json 顯示（不會留白），讀到 Supabase 的 check_status 再更新成最新的檢查時間
+  renderStatus({ ...data, last_check: statusRecord(null, data) }, now);
+  if (plan.auth) {
+    fetchCheckStatus(plan.auth).then((remote) => {
+      if (remote) renderStatus({ ...data, last_check: statusRecord(remote, data) }, now);
+    });
+  }
   chartWindow = historyWindow(data);
   $("chart-title").textContent = `${chartWindow.label}走勢`;
   if (data.repo_url) $("repo-link").href = data.repo_url;
@@ -962,6 +1020,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     dataUrl, previewNow, previewPublic, formatTime, formatDate, timeAgo, formatPct, unitHint, cardView,
     currencyGroups, pickCurrency, taipeiIso, decodeHistory, overviewRows, scheduleText, homeRows,
+    checkStatusRecord, fallbackLastCheck, statusRecord, fetchCheckStatus,
     toMinutes, inCheckHours, nextCheck, isStale, statusLine, parseAmount, converterView,
     yRange, formatChange, periodChange, historyWindow, timeTicks, tickLabel,
     markerIndexes, chartSummary, bootPlan, publicCurrencies,

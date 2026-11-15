@@ -212,3 +212,27 @@ def test_deploy_migrations_triggers_only_on_migration_changes():
     paths = re.findall(r'^      - "(.+)"$', on, re.M)
     assert paths == ["supabase/migrations/**", "supabase/prechecks/**"]
     assert "paths-ignore" not in on and "branches: [main]" in on
+
+
+# ---------- 只有資料有變才 commit／部署；gate 先讀 Supabase ----------
+
+
+def test_commit_and_deploy_only_when_data_changed():
+    wf = read("check-rates.yml")
+    commit = wf[wf.index("- name: Commit data to state branch") :]
+    commit = commit[: commit.index("- name: Fail if check reported errors")]
+    assert "python3 -m fx_alert.publish" in commit
+    assert 'echo "published=true"' in commit and 'echo "published=false"' in commit
+    # 判斷失敗時照常 commit（寧可多部署一次）
+    assert "|| echo true" in commit
+    assert "published: ${{ steps.commit.outputs.published }}" in wf
+    deploy = wf[wf.index("\n  deploy:") :]
+    assert "needs.check.outputs.published == 'true'" in deploy
+
+
+def test_gate_reads_check_status_with_public_values_only():
+    wf = read("check-rates.yml")
+    gate = wf[wf.index("\n  gate:") : wf.index("\n  check:")]
+    assert "SUPABASE_URL: ${{ vars.SUPABASE_URL }}" in gate
+    assert "SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}" in gate
+    assert "secrets." not in gate  # gate 不需要任何 secret

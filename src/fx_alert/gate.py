@@ -1,7 +1,10 @@
 """排程去重：自動觸發時，如果剛剛已經成功檢查過，就不再跑。
 
 check-rates 有兩個自動觸發來源：Supabase pg_cron（每 :05、:35，主要）和 GitHub schedule
-（每 :07、:37，備援）。兩個都觸發時，第二次會讀到 state 分支的 last_check.json：
+（每 :07、:37，備援）。兩個都觸發時，第二次會讀到上一次的檢查結果：
+    先讀 Supabase 的 check_status（publishable key，公開可讀；每次檢查都會更新），
+    讀不到（專案暫停、還沒套用 migration、沒設定）就用 state 分支的 last_check.json；
+    兩個都有時用比較新的那個。
     20 分鐘內已經成功檢查過 → run=false
     （不檢查、不 commit、不 ping 監控、不部署，workflow 仍是綠燈）
 
@@ -12,6 +15,7 @@ check-rates 有兩個自動觸發來源：Supabase pg_cron（每 :05、:35，主
 
 用法（workflow 裡）：
     PYTHONPATH=src python3 -m fx_alert.gate --last-check FILE --event EVENT --source SOURCE
+    環境變數 SUPABASE_URL、SUPABASE_PUBLISHABLE_KEY（沒有就只看 FILE）
 結果寫到 GITHUB_OUTPUT：run=true|false、reason=…
 """
 
@@ -21,6 +25,8 @@ import argparse
 import json
 import os
 import sys
+import urllib.parse
+import urllib.request
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -60,6 +66,46 @@ def decide(
     return True, f"{trigger}：上次成功檢查是 {minutes} 分鐘前，檢查"
 
 
+def from_check_status(rows: object) -> dict | None:
+    """check_status 的回應（[{checked_at, ok, errors}]）→ 和 last_check.json 一樣的格式。"""
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        return None
+    row = rows[0]
+    if "checked_at" not in row:
+        return None
+    return {"at": row["checked_at"], "ok": row.get("ok"), "errors": row.get("errors")}
+
+
+def newest(*records: object) -> object:
+    """幾份檢查紀錄裡最新的一份；時間讀不懂的不算。全部都沒有就回傳 None。"""
+    best, best_at = None, None
+    for r in records:
+        try:
+            at = datetime.fromisoformat(str(r["at"]))  # type: ignore[index]
+        except (TypeError, KeyError, ValueError):
+            continue
+        if at.tzinfo is None:
+            continue
+        if best_at is None or at > best_at:
+            best, best_at = r, at
+    return best
+
+
+def fetch_check_status(url: str, key: str, timeout: float = 5) -> dict | None:
+    """用 publishable key 讀 check_status；任何錯誤都回傳 None（改用 state 分支的紀錄）。"""
+    if not url or not key:
+        return None
+    query = urllib.parse.urlencode({"select": "checked_at,ok,errors", "id": "eq.1"})
+    req = urllib.request.Request(
+        f"{url.rstrip('/')}/rest/v1/check_status?{query}", headers={"apikey": key}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310  網址來自設定
+            return from_check_status(json.loads(resp.read().decode("utf-8")))
+    except Exception:  # noqa: BLE001  連不到、401、格式不對都一樣：改用 state 分支
+        return None
+
+
 def _read(path: Path) -> object:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -74,8 +120,16 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
     parser.add_argument("--source", default="")
     try:
         args = parser.parse_args(argv)
+        remote = fetch_check_status(
+            os.environ.get("SUPABASE_URL", ""), os.environ.get("SUPABASE_PUBLISHABLE_KEY", "")
+        )
+        local = _read(args.last_check)
+        print(
+            "上次檢查：Supabase check_status "
+            + ("讀得到" if remote else "讀不到，改用 state 分支的 last_check.json")
+        )
         run, reason = decide(
-            _read(args.last_check),
+            newest(remote, local) if remote else local,
             now or datetime.now(UTC),
             event=args.event,
             source=args.source,

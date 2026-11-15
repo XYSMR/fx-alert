@@ -76,6 +76,10 @@ class RuleStore(Protocol):
 
     def count_sent_since(self, since: datetime) -> int: ...
 
+    def record_check(self, at: datetime, ok: bool, errors: int) -> None:
+        """記錄這次檢查的結果（多人版寫到 Supabase 的 check_status；單人版不做事）。"""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # FileStore：單人版（現在的做法）
@@ -131,6 +135,9 @@ class FileStore:
 
     def count_sent_since(self, since: datetime) -> int:
         return sum(1 for a in read_alerts(self._cfg.data_dir) if a.sent_at >= since)
+
+    def record_check(self, at: datetime, ok: bool, errors: int) -> None:
+        return None  # 單人版：最後檢查時間只寫 last_check.json
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +279,22 @@ class SupabaseStore:
     def flush(self) -> bool:
         return self._changed  # 每次都已直接寫入，這裡只回報有沒有變更
 
+    def record_check(self, at: datetime, ok: bool, errors: int) -> None:
+        """upsert check_status 唯一的一列（id=1）。公開資訊：只有時間、成功與否、錯誤數量。"""
+        self._request(
+            "POST",
+            "check_status",
+            params={"on_conflict": "id"},
+            headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+            json={
+                "id": 1,
+                "checked_at": at.isoformat(timespec="seconds"),
+                "ok": ok,
+                "errors": errors,
+                "updated_at": at.isoformat(timespec="seconds"),
+            },
+        )
+
 
 class ReadOnlyStore:
     """只讀不寫：判斷照常，但狀態和通知紀錄都不寫入（多人版 --dry-run 用）。"""
@@ -299,6 +322,9 @@ class ReadOnlyStore:
 
     def flush(self) -> bool:
         return False
+
+    def record_check(self, at: datetime, ok: bool, errors: int) -> None:
+        self._log(f"[dry-run] 不寫入檢查狀態（ok={ok}、錯誤 {errors} 個）")
 
 
 def _row_to_watch(row: dict) -> Watch:

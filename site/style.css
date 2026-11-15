@@ -212,3 +212,23 @@ button.danger-button:disabled { opacity: .45; cursor: not-allowed; }
 /* 走勢圖：資料期間說明、期間變動 */
 #chart-note { margin: 0 0 4px; }
 .change { margin: 0 0 8px; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+/* 選幣別（卡片、試算、走勢都跟著它） */
+.picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 16px; }
+.picker label { font-weight: 700; }
+.picker select { font: inherit; font-size: 1.05rem; padding: 8px 12px; min-width: 14em; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); }
+.picker select:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.picker .hint { flex-basis: 100%; margin: 0; }
+#conv-currency, #chart-currency { color: var(--muted); font-weight: 400; }
+
+/* 全部幣別一覽 */
+.overview summary { cursor: pointer; list-style: revert; }
+.overview summary h2 { display: inline; }
+.overview-table td, .overview-table th { font-variant-numeric: tabular-nums; }
+.overview-table tr[aria-current="true"] { background: var(--bg); }
+.overview-table .change.up { color: #a14a00; }
+.overview-table .change.down { color: #1f7a3f; }
+button.link { font: inherit; background: none; border: 0; padding: 0; color: var(--blue); cursor: pointer; text-align: left; text-decoration: underline; }
+@media (max-width: 640px) {
+  .picker select { flex: 1; min-width: 0; min-height: 44px; }
+}

@@ -11,6 +11,10 @@
 完全不讀環境變數，所以 Secrets 不可能出現在輸出裡；測試另外再檢查一次。
 
 計算都在這裡做完（距離目標幾 %、狀態、30 天範圍），前端只負責顯示。
+
+輸出拆成兩種檔案（全部 18 種幣別的走勢放在一個檔案會超過 1 MB）：
+  * data.json：每個幣別的現價、30 天最高最低、期間變動等（約幾 KB），頁面一打開就載入
+  * history/<幣別>.json：該幣別的走勢，壓縮格式（見 compact_history），前端選了那個幣別才載入
 """
 
 from __future__ import annotations
@@ -22,8 +26,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
-from fx_alert.config import CURRENCY_NAMES, TAIPEI, AppConfig
-from fx_alert.currencies import format_price
+from fx_alert.config import TAIPEI, AppConfig
+from fx_alert.currencies import CATALOG, SPOT_ONLY, TICK, format_price
 from fx_alert.history import first_quote_at, read_alerts, read_last_check, read_quotes
 from fx_alert.notifier import BANK_LABEL, RATE_PAGE
 from fx_alert.rules import AlertState
@@ -63,7 +67,16 @@ def _extreme(series: list, pick) -> dict[str, str] | None:
         return None
     best = pick(series, key=lambda q: q.cash_sell)
     first = next(q for q in series if q.cash_sell == best.cash_sell)
-    return {"rate": str(first.cash_sell), "at": _iso(first.quoted_at)}
+    return {"rate": format_price(first.cash_sell), "at": _iso(first.quoted_at)}
+
+
+def change_pct(series: list) -> float | None:
+    """這段期間的變動 %：第一筆 → 最後一筆，小數 2 位（給「全部幣別一覽」用，不用載入走勢）。"""
+    if len(series) < 2:
+        return None
+    first, last = series[0].cash_sell, series[-1].cash_sell
+    pct = (last - first) / first * 100
+    return float(pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) + 0.0  # 不要 -0.0
 
 
 def _add_minutes(t, minutes: int):
@@ -121,28 +134,42 @@ def build_data(
     for q in quotes:
         by_code.setdefault(q.currency, []).append(q)
 
+    # 依兆豐牌告的順序列出：config.yaml 設定的幣別，加上有走勢資料的幣別（多人版是全部 18 種）
+    rules = {r.currency: r for r in cfg.rules}
     currencies = []
-    for rule in cfg.rules:
-        series = by_code.get(rule.currency, [])
+    for cur in CATALOG:
+        series = by_code.get(cur.code, [])
+        rule = rules.get(cur.code)
+        if rule is None and not series:
+            continue
         latest = series[-1] if series else None
-        entry = states.get(rule.currency)
-        currencies.append(
-            {
-                "code": rule.currency,
-                "name": CURRENCY_NAMES.get(rule.currency, rule.currency),
-                "rate": str(latest.cash_sell) if latest else None,
-                "rate_at": _iso(latest.quoted_at) if latest else None,
-                "target": format_price(rule.target),
-                "buffer": format_price(rule.buffer),
-                "rearm_above": format_price(rule.rearm_above),
-                "distance_pct": distance_pct(latest.cash_sell, rule.target) if latest else None,
-                "status": STATUS[entry.state] if entry else "waiting",
-                "status_since": entry.changed_at if entry else None,
-                "high": _extreme(series, max),
-                "low": _extreme(series, min),
-                "history": [[_iso(q.quoted_at), str(q.cash_sell)] for q in series],
-            }
-        )
+        c: dict[str, Any] = {
+            "code": cur.code,
+            "name": cur.name_zh,
+            "sort_order": cur.sort_order,
+            "popular_rank": cur.popular_rank,
+            "rate": format_price(latest.cash_sell) if latest else None,
+            "rate_at": _iso(latest.quoted_at) if latest else None,
+            "change_pct": change_pct(series),
+            "high": _extreme(series, max),
+            "low": _extreme(series, min),
+            "history": [[_iso(q.quoted_at), format_price(q.cash_sell)] for q in series],
+        }
+        if rule is not None:
+            entry = states.get(cur.code)
+            c.update(
+                {
+                    "target": format_price(rule.target),
+                    "buffer": format_price(rule.buffer),
+                    "rearm_above": format_price(rule.rearm_above),
+                    "distance_pct": (
+                        distance_pct(latest.cash_sell, rule.target) if latest else None
+                    ),
+                    "status": STATUS[entry.state] if entry else "waiting",
+                    "status_since": entry.changed_at if entry else None,
+                }
+            )
+        currencies.append(c)
 
     alerts = [
         {
@@ -173,19 +200,75 @@ def build_data(
             "first_check": f"{_add_minutes(cfg.hours.start, SCHEDULE_OFFSET_MINUTES):%H:%M}",
         },
         "currencies": currencies,
+        # 兆豐只有即期匯率、不支援的幣別（網頁下拉選單下方註明）
+        "unsupported": [{"code": k, "name": v} for k, v in SPOT_ONLY.items()],
         "alerts": alerts,
     }
     if public:
         for c in currencies:
             for k in PERSONAL_FIELDS:
-                del c[k]
+                c.pop(k, None)
         data["alerts"] = []
         del data["edit_config_url"]
     return data
 
 
-def write_data_json(data: dict[str, Any], out: Path) -> None:
-    out.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-    with open(out, "w", encoding="utf-8", newline="\n") as f:
+HISTORY_KEYS = {"code", "start", "dt", "v"}
+SCALE = int(1 / TICK)  # 價格 × 10⁴ 存成整數（兆豐牌告都是小數 4 位）
+
+
+def compact_history(code: str, history: list[list[str]]) -> dict[str, Any]:
+    """走勢的壓縮格式：
+
+        {"code": "JPY", "start": "2026-11-09T09:05:00+08:00",
+         "dt": [0, 1800, 480, ...],     # 和前一個點相差幾秒（第一個是 0）
+         "v":  [2114, 2115, 2107, ...]} # 價格 × 10⁴ 的整數
+
+    每個點約 9 bytes（原本約 41 bytes）；前端 decodeHistory() 還原成 [時間, "0.2114"]。
+    """
+    if not history:
+        return {"code": code, "start": None, "dt": [], "v": []}
+    times = [datetime.fromisoformat(t) for t, _ in history]
+    dt = [0] + [int((b - a).total_seconds()) for a, b in zip(times, times[1:], strict=False)]
+    values = []
+    for _, rate in history:
+        scaled = Decimal(rate) * SCALE
+        if scaled != scaled.to_integral_value():
+            raise ValueError(f"{code} 的價格 {rate} 不是牌告的 4 位小數")
+        values.append(int(scaled))
+    return {"code": code, "start": history[0][0], "dt": dt, "v": values}
+
+
+def history_problems(obj: dict[str, Any]) -> list[str]:
+    """公開的 history/<幣別>.json 只能有走勢（code、start、dt、v），不能有其他欄位。"""
+    extra = sorted(set(obj) - HISTORY_KEYS)
+    return [f"{obj.get('code')}.{k}" for k in extra]
+
+
+def _write_json(obj: Any, path: Path, *, indent: int | None = 2) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    seps = None if indent else (",", ":")
+    text = json.dumps(obj, ensure_ascii=False, indent=indent, separators=seps) + "\n"
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
+
+
+def write_data_json(data: dict[str, Any], out: Path, history_dir: Path | None = None) -> None:
+    """寫出 data.json（不含走勢）和 history/<幣別>.json。
+
+    history_dir 預設是 data.json 旁邊的 history/；history_url 是相對於 data.json 的路徑。
+    舊的走勢檔（已經不在清單上的幣別）會先清掉。
+    """
+    history_dir = history_dir or out.parent / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    for old in history_dir.glob("*.json"):
+        old.unlink()
+    slim = {**data, "currencies": []}
+    for c in data["currencies"]:
+        c = dict(c)
+        history = c.pop("history", [])
+        path = history_dir / f"{c['code']}.json"
+        _write_json(compact_history(c["code"], history), path, indent=None)
+        c["history_url"] = path.relative_to(out.parent).as_posix()
+        slim["currencies"].append(c)
+    _write_json(slim, out)

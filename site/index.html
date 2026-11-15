@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FX Alert 匯率到價提醒</title>
-  <meta name="description" content="兆豐銀行日圓、韓元買外幣現鈔價格追蹤與到價提醒">
+  <meta name="description" content="兆豐銀行 18 種外幣現鈔賣出價追蹤、換匯試算與到價提醒">
   <!-- 只能執行本站的程式；只能連到本站和 Supabase（登入功能開啟時） -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co http://127.0.0.1:54321; base-uri 'self'; form-action 'self'">
@@ -23,15 +23,21 @@
   </header>
 
   <main>
-    <section aria-labelledby="cards-title">
-      <h2 id="cards-title" class="visually-hidden">各幣別目前狀況</h2>
+    <section class="picker" aria-label="選擇幣別">
+      <label for="currency">幣別</label>
+      <!-- 卡片、換匯試算、走勢圖都跟著這裡選的幣別；網址 #JPY 可以直接分享 -->
+      <select id="currency"></select>
+      <p class="hint" id="unsupported-note" hidden></p>
+    </section>
+
+    <section aria-labelledby="cards-title" aria-live="polite">
+      <h2 id="cards-title" class="visually-hidden">目前匯率</h2>
       <div class="cards" id="cards"></div>
     </section>
 
     <section class="panel" aria-labelledby="conv-title">
       <div class="panel-head">
-        <h2 id="conv-title">換匯試算</h2>
-        <div class="tabs" role="tablist" aria-label="試算幣別" id="conv-tabs"></div>
+        <h2 id="conv-title">換匯試算<span id="conv-currency"></span></h2>
       </div>
       <label class="amount" for="twd">
         <span>我要換</span>
@@ -51,10 +57,9 @@
       <p class="hint" id="conv-note">※ 僅供參考。實際金額依銀行鈔票面額與手續費而定。</p>
     </section>
 
-    <section class="panel" aria-labelledby="chart-title">
+    <section class="panel" aria-labelledby="chart-heading">
       <div class="panel-head">
-        <h2 id="chart-title">近 30 天走勢</h2>
-        <div class="tabs" role="tablist" aria-label="走勢幣別" id="chart-tabs"></div>
+        <h2 id="chart-heading"><span id="chart-title">近 30 天走勢</span><span id="chart-currency"></span></h2>
       </div>
       <p class="hint" id="chart-note" hidden></p>
       <p class="change" id="chart-change" hidden></p>
@@ -64,6 +69,19 @@
       <ul class="marks" id="chart-marks"></ul>
       <!-- 文字摘要：給螢幕閱讀器，畫面上不顯示（避免和圖、標記重複） -->
       <p class="visually-hidden" id="chart-summary"></p>
+    </section>
+
+    <section class="panel" aria-labelledby="overview-title">
+      <details class="overview">
+        <summary><h2 id="overview-title">全部幣別一覽</h2></summary>
+        <p class="hint">點幣別名稱可以切換上面的卡片、試算和走勢。</p>
+        <table class="alerts overview-table">
+          <thead>
+            <tr><th scope="col">幣別</th><th scope="col">現金賣出</th><th scope="col" id="overview-change-head">近 30 天變動</th></tr>
+          </thead>
+          <tbody id="overview-body"></tbody>
+        </table>
+      </details>
     </section>
 
     <!-- 登入後才出現：我的提醒、我的通知紀錄（account.js） -->

@@ -10,4 +10,5 @@ state.json
 data/
 # 由 build-site 產生，部署時才建立
 site/data.json
+site/history/
 site/config.js

@@ -2,8 +2,10 @@
 
     python scripts/make_samples.py
 
-全部透過真正的 build_data() 產生，所以格式一定跟正式的 data.json 一樣。
+全部透過真正的 build_data()、write_data_json() 產生，所以格式一定跟正式的 data.json 一樣。
+走勢拆在 site/samples/<情境>/<幣別>.json（正式部署是 history/<幣別>.json）。
 走勢是「假資料」（平滑曲線），只用來看畫面，不代表真實匯率。
+除了 new.json，其他情境都有全部 18 種幣別（日圓、韓元有目標價，其他只有行情）。
 
 | 檔案            | 情境                                                         |
 |-----------------|--------------------------------------------------------------|
@@ -37,6 +39,35 @@ LAST = datetime(2026, 11, 9, 16, 10, 12)  # 最後一份牌告（兆豐給的是
 CHECK = datetime(2026, 11, 9, 16, 12, 10, tzinfo=TAIPEI)
 
 
+# 其他 16 種幣別的基準價（2026/11/09 兆豐牌告的現金賣出價），走勢在上下約 1% 內擺動
+OTHER_BASE = {
+    "USD": "33.0400",
+    "HKD": "4.2290",
+    "GBP": "44.7300",
+    "AUD": "22.9200",
+    "CAD": "23.6400",
+    "SGD": "25.8900",
+    "CHF": "40.3500",
+    "THB": "1.0370",
+    "NZD": "18.6300",
+    "EUR": "37.0400",
+    "MYR": "8.6700",
+    "IDR": "0.0021",
+    "PHP": "0.5820",
+    "MOP": "4.3420",
+    "VND": "0.0015",
+    "CNY": "4.9790",
+}
+
+
+def others(i: int) -> dict:
+    out = {}
+    for k, (code, base) in enumerate(OTHER_BASE.items()):
+        v = D(base) * D(str(1 + 0.01 * math.sin(i / 5 + k)))
+        out[code] = v.quantize(D("0.0001"))
+    return out
+
+
 def fake_history(d: Path) -> None:
     """平日每天兩份牌告的假走勢。從 35 天前開始，資料比 30 天的視窗長，網頁才會當作「滿 30 天」。"""
     day, i = NOW - timedelta(days=35), 0
@@ -47,7 +78,7 @@ def fake_history(d: Path) -> None:
                 jpy = round(0.2160 - 0.0105 * drift + 0.0012 * math.sin(i / 3), 4)
                 krw = round(0.0268 - 0.0006 * drift + 0.0002 * math.sin(i / 4), 4)
                 t = day.replace(hour=hh, minute=mm, second=0, tzinfo=None)
-                append_quotes(d, t, {"JPY": D(str(jpy)), "KRW": D(str(krw))})
+                append_quotes(d, t, {"JPY": D(str(jpy)), "KRW": D(str(krw)), **others(i)})
                 i += 1
         day += timedelta(days=1)
 
@@ -60,7 +91,7 @@ def scenario(name, jpy_now, jpy_state, alerts=(), ok=True, earlier_today=None):
             append_quotes(
                 d, LAST.replace(hour=11, minute=5), {"JPY": D(earlier_today), "KRW": D("0.0264")}
             )
-        append_quotes(d, LAST, {"JPY": D(jpy_now), "KRW": D("0.0263")})
+        append_quotes(d, LAST, {"JPY": D(jpy_now), "KRW": D("0.0263"), **others(70)})
         states = {"KRW": CurrencyState(AlertState.ARMED, "2026-11-02T09:07:00+08:00", "0.0266")}
         if jpy_state:
             states["JPY"] = jpy_state
@@ -97,7 +128,8 @@ def new_history() -> None:
 
 def write(name: str, data_dir: Path, now: datetime = NOW) -> None:
     cfg = load_config(ROOT / "config.yaml")
-    write_data_json(build_data(cfg, data_dir, now=now, repo="XYSMR/fx-alert"), OUT / f"{name}.json")
+    data = build_data(cfg, data_dir, now=now, repo="XYSMR/fx-alert")
+    write_data_json(data, OUT / f"{name}.json", history_dir=OUT / name)
     print(f"已產生 {OUT / name}.json")
 
 

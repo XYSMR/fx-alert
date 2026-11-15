@@ -77,7 +77,7 @@ jobs:
         run: |
           mkdir _site
           cp -r site/index.html site/style.css site/app.js site/account.js site/vendor \
-            site/data.json site/unsubscribe.html site/unsubscribe.js site/privacy.html _site/
+            site/data.json site/history site/unsubscribe.html site/unsubscribe.js site/privacy.html _site/
           find _site -type f | sort
 
       # 登入功能開關（GitHub → Settings → Variables，不是 Secrets：這些值本來就公開）
@@ -115,12 +115,15 @@ jobs:
           fi
           python - <<'PY'
           import json, sys
-          from fx_alert.build_site import public_problems
+          from pathlib import Path
+          from fx_alert.build_site import history_problems, public_problems
           problems = public_problems(json.load(open("_site/data.json", encoding="utf-8")))
+          for path in sorted(Path("_site/history").glob("*.json")):
+              problems += history_problems(json.loads(path.read_text(encoding="utf-8")))
           if problems:
-              print("::error::公開的 data.json 含有個人設定：" + ", ".join(problems))
+              print("::error::公開的 data.json／history 含有個人設定：" + ", ".join(problems))
               sys.exit(1)
-          print("data.json 只有公開行情")
+          print("data.json 和 history/ 只有公開行情")
           PY
 
       - uses: actions/configure-pages@v5

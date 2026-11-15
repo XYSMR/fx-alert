@@ -386,9 +386,14 @@ migration 放在 `supabase/migrations/`，檔名 `<14 位數字版本號>_<名�
         （例如 pg_cron 的 dispatch 函式、`fx-alert-dispatch` 兩個 cron job）；物件不存在、查詢出錯、或沒有檢查檔都會停止，
         避免「其實沒套用、卻被標成已套用」
       - 待套用的版本：`supabase/prechecks/<版本號>_*.sql` 回傳任何一列就停止（log 只印列數，不印內容）
-   3. 補上以前手動套用、但沒有紀錄的版本（`supabase/migrations_baseline.txt`；只寫紀錄，不重新執行）
-   4. `supabase db push` 依序套用（Supabase CLI，和 CI 同一個版本）
-   5. 再比對一次，確認沒有遺漏
+   3. **唯一會寫入的一步**：再確認計畫和第 1 步相同、在同一個連線上再跑一次第 2 步的檢查，然後
+      - 補上以前手動套用、但沒有紀錄的版本（`supabase/migrations_baseline.txt`；只寫紀錄，不重新執行）
+      - 依序套用，每個 migration 一個交易（SQL 和紀錄一起 commit；失敗就整個 rollback，不會只套用一半）
+   4. 再比對一次，確認沒有遺漏
+
+   寫入用 Python（psycopg），不用 Supabase CLI：`supabase@3.0.0` 的 `--remote` 解析不了 Session pooler 的連線字串
+   （第一次執行時 `failed to parse connection string`），psycopg 則可以正常連線。紀錄寫在 CLI 用的同一張表、
+   同樣的欄位（`version`、`name`、`statements`），`supabase migration list` 照樣看得懂。
 
 **核准前先想一下時機**：有依賴 workflow 或前端的 migration（例如 pg_cron 送出的 inputs），
 要等相關的程式也合併、部署好再核准；反過來，程式要用到新欄位的，先核准 migration 再合併程式。

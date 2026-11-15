@@ -170,13 +170,12 @@ def test_deploy_migrations_needs_production_approval():
 
 
 def test_deploy_migrations_checks_before_writing():
-    """順序：比對 → 事前檢查 → 補紀錄 → 套用 → 確認；寫入（npx supabase）一定在事前檢查之後。"""
+    """順序：比對 → 事前檢查 → 補紀錄＋套用 → 確認；唯一會寫入的 apply 一定在事前檢查之後。"""
     wf = read("deploy-migrations.yml").split("steps:", 1)[1]  # 只看 steps，不看開頭的說明
     order = [
         "migrations_deploy plan",
         "migrations_deploy precheck",
-        "migration repair --status applied",
-        "db push",
+        "migrations_deploy apply",
         "migrations_deploy verify",
     ]
     positions = [wf.index(s) for s in order]
@@ -189,15 +188,18 @@ def test_deploy_migrations_db_url_only_in_steps_that_need_it():
     wf = read("deploy-migrations.yml")
     job_header = wf.split("steps:")[0]
     assert "DB_URL" not in job_header.split("jobs:")[1]  # 不放在 job 層級：安裝套件的步驟拿不到
-    assert wf.count("DB_URL: ${{ secrets.PRODUCTION_DB_URL }}") == 5
+    assert wf.count("DB_URL: ${{ secrets.PRODUCTION_DB_URL }}") == 4
     for line in wf.splitlines():
         assert not re.search(r"echo .*DB_URL", line), line
 
 
-def test_deploy_migrations_uses_same_cli_version_as_ci():
-    ci, wf = read("ci.yml"), read("deploy-migrations.yml")
-    versions = set(re.findall(r"supabase@(\d+\.\d+\.\d+)", ci + wf))
-    assert len(versions) == 1, versions
+def test_deploy_migrations_writes_with_python_not_cli():
+    """寫入用 psycopg（CLI 3.0.0 解析不了 pooler 連線字串）；apply 要拿到第 1 步的計畫。"""
+    wf = read("deploy-migrations.yml").split("steps:", 1)[1]
+    assert "npx" not in wf and "supabase@" not in wf
+    apply = wf.split("3. 補紀錄＋套用", 1)[1].split("- name:", 1)[0]
+    assert "EXPECT_REPAIR: ${{ steps.plan.outputs.repair }}" in apply
+    assert "EXPECT_PENDING: ${{ steps.plan.outputs.pending }}" in apply
 
 
 def test_deploy_migrations_triggers_only_on_migration_changes():

@@ -67,3 +67,63 @@ def test_missing_object_is_reported(break_it, expected):
 def test_check_query_error_counts_as_missing(conn):
     missing = md.run_object_check(conn, "select 'x' as item, true as ok from no_such_table")
     assert len(missing) == 1 and "檢查查詢出錯" in missing[0]
+
+
+# ---------- apply：寫入（每個測試都在最後 rollback 的交易裡） ----------
+
+
+@pytest.fixture
+def wconn():
+    c = md.connect(DB_URL, read_only=False)
+    with c.cursor() as cur:  # 本機替身沒有這張表；CI 的 Supabase 已經有，這行什麼都不做
+        cur.execute("create schema if not exists supabase_migrations")
+        cur.execute(
+            "create table if not exists supabase_migrations.schema_migrations "
+            "(version text primary key, statements text[], name text)"
+        )
+    yield c
+    c.rollback()
+    c.close()
+
+
+def test_apply_runs_sql_and_records_like_cli(wconn):
+    sql = (
+        "create table public.zz_deploy_test (id int);\n"
+        "do $$ begin insert into public.zz_deploy_test values (1); end $$;\n"
+    )
+    assert md.history_has_statements(wconn)
+    md.apply_migration(wconn, "29991231000000", "zz_test", sql, with_statements=True)
+    with wconn.cursor() as cur:
+        cur.execute("select count(*) from public.zz_deploy_test")
+        assert cur.fetchone()[0] == 1
+        cur.execute(
+            "select name, statements from supabase_migrations.schema_migrations "
+            "where version = '29991231000000'"
+        )
+        assert cur.fetchone() == ("zz_test", [sql])
+
+
+def test_failed_migration_leaves_nothing(wconn):
+    """migration 中途出錯：連同前面成功的語句和紀錄一起 rollback，不會只套用一半。"""
+    sql = "create table public.zz_half (id int);\nselect 1 / 0;\n"
+    with pytest.raises(psycopg.errors.DivisionByZero):
+        with (
+            wconn.transaction()
+        ):  # savepoint：只 rollback 這個 migration（apply 是整個交易 rollback）
+            md.apply_migration(wconn, "29991231000001", "zz_half", sql, with_statements=True)
+    with wconn.cursor() as cur:
+        cur.execute("select to_regclass('public.zz_half')")
+        assert cur.fetchone()[0] is None
+        cur.execute(
+            "select count(*) from supabase_migrations.schema_migrations "
+            "where version = '29991231000001'"
+        )
+        assert cur.fetchone()[0] == 0
+
+
+def test_checks_stay_read_only_on_a_writable_connection(wconn):
+    """apply 用可寫入的連線，但物件檢查、事前檢查仍然在唯讀交易裡。"""
+    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+        md.run_precheck(wconn, "update public.currencies set name_zh = name_zh")
+    wconn.rollback()
+    assert md.run_object_check(wconn, "select 'x' as item, true as ok") == []

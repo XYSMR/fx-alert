@@ -23,32 +23,48 @@
     {
       "code": "JPY",
       "name": "日圓",
+      "sort_order": 4,
+      "popular_rank": 1,
       "rate": null,
       "rate_at": null,
+      "change_pct": null,
+      "high": null,
+      "low": null,
       "target": "0.2050",
       "buffer": "0.0010",
       "rearm_above": "0.2060",
       "distance_pct": null,
       "status": "waiting",
       "status_since": null,
-      "high": null,
-      "low": null,
-      "history": []
+      "history_url": "empty/JPY.json"
     },
     {
       "code": "KRW",
       "name": "韓元",
+      "sort_order": 12,
+      "popular_rank": 2,
       "rate": null,
       "rate_at": null,
+      "change_pct": null,
+      "high": null,
+      "low": null,
       "target": "0.0245",
       "buffer": "0.0002",
       "rearm_above": "0.0247",
       "distance_pct": null,
       "status": "waiting",
       "status_since": null,
-      "high": null,
-      "low": null,
-      "history": []
+      "history_url": "empty/KRW.json"
+    }
+  ],
+  "unsupported": [
+    {
+      "code": "ZAR",
+      "name": "南非幣"
+    },
+    {
+      "code": "SEK",
+      "name": "瑞典幣"
     }
   ],
   "alerts": []

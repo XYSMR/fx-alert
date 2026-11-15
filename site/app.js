@@ -79,15 +79,77 @@ function formatPct(pct) {
 }
 
 /**
- * 匯率換算說明。匯率 = 1 單位外幣要付幾元台幣。
- * 數字夠大（日圓）：「1 台幣 ≈ 4.72 日圓」；
- * 數字很小（韓元）：「1,000 韓元 ≈ 26.3 台幣」比較好懂。
+ * 換算說明的單位自動決定。匯率 = 1 單位外幣要付幾元台幣。
+ * - 匯率 ≥ 1（美元、泰銖）：「1 美元 ≈ 33.14 台幣」
+ * - 匯率 < 1：取最小的 U（10、100、1,000…）讓 U × 匯率 ≥ 10：「100 日圓 ≈ 21.07 台幣」、
+ *   「10,000 越南盾 ≈ 15.00 台幣」；0.1 ≤ 匯率 < 1（日圓、菲律賓比索）再補一句「1 台幣 ≈ 4.75 日圓」
  */
-function rateHint(rate, name) {
+function unitHint(rate, name) {
   const r = Number(rate);
   if (!rate || !(r > 0)) return "";
-  if (r >= 0.1) return `1 台幣 ≈ ${(1 / r).toFixed(2)} ${name}`;
-  return `1,000 ${name} ≈ ${(1000 * r).toFixed(1)} 台幣`;
+  if (r >= 1) return `1 ${name} ≈ ${r.toFixed(2)} 台幣`;
+  let unit = 10;
+  while (unit * r < 10 && unit < 1e9) unit *= 10;
+  const main = `${numberFmt.format(unit)} ${name} ≈ ${(unit * r).toFixed(2)} 台幣`;
+  return r >= 0.1 ? `${main}・1 台幣 ≈ ${(1 / r).toFixed(2)} ${name}` : main;
+}
+
+/**
+ * 下拉選單的分組：我的提醒（有目標價）→ 常用（popular_rank）→ 其他（兆豐牌告順序）。
+ * 選項文字「日圓 JPY」。只有 18 種，用原生 <select> 就好（手機、螢幕閱讀器最友善）。
+ */
+function currencyGroups(list) {
+  const bySort = (a, b) => (a.sort_order ?? 99) - (b.sort_order ?? 99);
+  const hasTarget = (c) => c.target !== null && c.target !== undefined;
+  const mine = list.filter(hasTarget).sort(bySort);
+  const rest = list.filter((c) => !hasTarget(c));
+  const popular = rest.filter((c) => c.popular_rank).sort((a, b) => a.popular_rank - b.popular_rank);
+  const others = rest.filter((c) => !c.popular_rank).sort(bySort);
+  return [["我的提醒", mine], ["常用", popular], ["其他", others]]
+    .filter(([, items]) => items.length)
+    .map(([label, items]) => ({ label, options: items.map((c) => ({ value: c.code, label: `${c.name} ${c.code}` })) }));
+}
+
+/** 一開始要顯示哪個幣別：網址 #JPY → 上次看的（localStorage）→ 下拉選單的第一個 */
+function pickCurrency(list, hash, saved) {
+  const codes = new Set(list.map((c) => c.code));
+  const fromHash = String(hash ?? "").replace(/^#/, "").toUpperCase();
+  if (codes.has(fromHash)) return fromHash;
+  if (codes.has(saved)) return saved;
+  const groups = currencyGroups(list);
+  return groups.length ? groups[0].options[0].value : null;
+}
+
+/** 毫秒時間戳 → 台灣時間的 ISO 字串（和 data.json 一樣：2026-11-09T09:05:00+08:00） */
+function taipeiIso(ms) {
+  const d = new Date(ms + 8 * 3600 * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}` +
+    `T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}+08:00`;
+}
+
+/**
+ * history/<幣別>.json 的壓縮格式 → [[時間, "0.2114"], …]（和原本 data.json 的 history 一樣）。
+ * dt：和前一個點相差幾秒；v：價格 × 10⁴ 的整數。
+ */
+function decodeHistory(obj) {
+  if (!obj || !obj.start || !Array.isArray(obj.dt) || !Array.isArray(obj.v)) return [];
+  let t = Date.parse(obj.start);
+  return obj.v.map((v, i) => {
+    t += (obj.dt[i] ?? 0) * 1000;
+    return [taipeiIso(t), (v / 10000).toFixed(4)];
+  });
+}
+
+/** 「全部幣別一覽」每一列：名稱、現價、期間變動 */
+function overviewRows(list) {
+  return [...list].sort((a, b) => (a.sort_order ?? 99) - (b.sort_order ?? 99)).map((c) => ({
+    code: c.code,
+    label: `${c.name} ${c.code}`,
+    rate: c.rate ?? "—",
+    change: c.change_pct === null || c.change_pct === undefined ? "—" : formatChange(c.change_pct),
+    trend: !(c.change_pct > 0 || c.change_pct < 0) ? "flat" : c.change_pct > 0 ? "up" : "down",
+  }));
 }
 
 /**
@@ -254,18 +316,22 @@ function converterView(twd, rate, target, name, hint = null) {
  * current 省略時用最後一個匯率當現價。
  */
 const MIN_HALF_RANGE = 0.01;
+const QUOTE_TICK = 0.0001; // 牌告的報價單位（小數第 4 位）
 function yRange(rates, target, current) {
   const values = rates.map(Number);
   const now = Number(current ?? values[values.length - 1]);
   if (target !== null && target !== undefined) values.push(Number(target));
   if (now > 0) values.push(now * (1 - MIN_HALF_RANGE), now * (1 + MIN_HALF_RANGE));
+  // 越南盾、印尼盾的 1% 小於一個報價單位：至少涵蓋現價上下各 2 個 0.0001，
+  // 刻度也不小於 0.0001，Y 軸才不會出現一整排一樣的 0.0015
+  if (now > 0) values.push(now - 2 * QUOTE_TICK, now + 2 * QUOTE_TICK);
   const lo = Math.min(...values);
   const hi = Math.max(...values);
   const span = hi - lo;
   const raw = span / 5;
   const mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 5, 10].map((k) => k * mag)
-    .reduce((best, s) => (Math.abs(s - raw) < Math.abs(best - raw) ? s : best));
+  const step = Math.max(QUOTE_TICK, [1, 2, 5, 10].map((k) => k * mag)
+    .reduce((best, s) => (Math.abs(s - raw) < Math.abs(best - raw) ? s : best)));
   const round = (n) => Number(n.toFixed(10)); // 去掉浮點誤差
   return {
     min: round(Math.floor((lo - span * 0.05) / step) * step),
@@ -426,7 +492,7 @@ function renderCard(c) {
   if (v.badge) head.append(el("span", { class: `badge tone-${v.tone}` }, v.badge));
   card.append(head,
     el("p", { class: "rate" }, c.rate ?? "—"),
-    el("p", { class: "hint" }, rateHint(c.rate, c.name)));
+    el("p", { class: "hint" }, unitHint(c.rate, c.name)));
   const hasTarget = c.target !== null && c.target !== undefined;
   if (hasTarget) card.append(el("p", { class: "target" }, "你的目標 ", el("b", {}, c.target)));
   if (v.message) card.append(el("p", { class: `message tone-${v.tone}` }, v.message));
@@ -437,21 +503,6 @@ function renderCard(c) {
       el("ul", {}, ...v.details.map((d) => el("li", {}, d)))));
   }
   return card;
-}
-
-/** 幣別頁籤（試算和走勢圖各一組，互不影響） */
-function renderTabs(box, currencies, onSelect, selected = null) {
-  const select = (code) => {
-    for (const b of box.children) b.setAttribute("aria-selected", String(b.dataset.code === code));
-    onSelect(currencies.find((c) => c.code === code));
-  };
-  box.replaceChildren(...currencies.map((c) => {
-    const b = el("button", { type: "button", role: "tab", "data-code": c.code }, c.name);
-    b.addEventListener("click", () => select(c.code));
-    return b;
-  }));
-  if (!currencies.length) return;
-  select(currencies.some((c) => c.code === selected) ? selected : currencies[0].code);
 }
 
 // ---------- 換匯試算 ----------
@@ -473,12 +524,11 @@ function saveAmount(n) {
   }
 }
 
-let converterCode = null;
 let converterHint = null; // 多人版沒登入時：「等到目標價」那一行顯示的提示
 
-function setupConverter(currencies) {
+/** 換匯試算：跟著上方選的幣別 */
+function setupConverter(current) {
   const input = $("twd");
-  let current = null;
   if (!input.value) input.value = numberFmt.format(loadAmount());
 
   const update = () => {
@@ -512,11 +562,8 @@ function setupConverter(currencies) {
     const n = parseAmount(input.value);
     if (n !== null) input.value = numberFmt.format(n); // 離開輸入框時補上千分位
   };
-  renderTabs($("conv-tabs"), currencies, (c) => {
-    current = c;
-    converterCode = c.code;
-    update();
-  }, converterCode);
+  $("conv-currency").textContent = current ? `・${current.name}` : "";
+  update();
 }
 
 // ---------- 走勢圖 ----------
@@ -661,16 +708,108 @@ function showError(message) {
   $("cards").replaceChildren();
 }
 
-let chartCode = null;
+// ---------- 選幣別：卡片、試算、走勢都跟著下拉選單 ----------
 
-/** 依目前的幣別資料重畫卡片、試算、走勢（登入／登出、修改目標價後都會呼叫） */
+const CURRENCY_KEY = "fx-alert.currency";
+let currentList = [];
+let selectedCode = null;
+let dataBase = null; // data.json 的網址：history_url 相對於它
+const historyCache = new Map();
+let drawToken = 0;
+
+function loadSavedCurrency() {
+  try {
+    return localStorage.getItem(CURRENCY_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveCurrency(code) {
+  try {
+    localStorage.setItem(CURRENCY_KEY, code);
+  } catch {
+    // 存不了就算了
+  }
+}
+
+/** 走勢只在選到那個幣別時才載入（data.json 裡只有 history_url）；載過的留在記憶體 */
+async function historyOf(c) {
+  if (Array.isArray(c.history)) return c.history; // 舊版 data.json：走勢直接在裡面
+  if (historyCache.has(c.code)) return historyCache.get(c.code);
+  if (!c.history_url) return [];
+  const res = await fetch(new URL(c.history_url, dataBase), { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const hist = decodeHistory(await res.json());
+  historyCache.set(c.code, hist);
+  return hist;
+}
+
+async function showChart(c) {
+  const token = ++drawToken; // 快速切換幣別時，只畫最後選的那一個
+  $("chart-currency").textContent = `・${c.name}`;
+  let hist;
+  try {
+    hist = await historyOf(c);
+  } catch (err) {
+    if (token !== drawToken) return;
+    $("chart-note").hidden = false;
+    $("chart-note").textContent = `讀不到${c.name}的走勢資料（${err.message}）`;
+    return;
+  }
+  if (token !== drawToken) return;
+  drawChart({ ...c, history: hist });
+}
+
+function renderPicker() {
+  const select = $("currency");
+  select.replaceChildren(...currencyGroups(currentList).map((g) =>
+    el("optgroup", { label: g.label }, ...g.options.map((o) => el("option", { value: o.value }, o.label)))));
+  select.value = selectedCode;
+  select.onchange = () => selectCurrency(select.value);
+}
+
+function renderOverview() {
+  const label = chartWindow.partial ? chartWindow.label : "近 30 天";
+  $("overview-change-head").textContent = `${label}變動`;
+  $("overview-body").replaceChildren(...overviewRows(currentList).map((r) => {
+    const btn = el("button", { type: "button", class: "link" }, r.label);
+    btn.addEventListener("click", () => {
+      selectCurrency(r.code);
+      $("currency").focus();
+    });
+    const row = el("tr", r.code === selectedCode ? { "aria-current": "true" } : {},
+      el("th", { scope: "row" }, btn),
+      el("td", {}, r.rate),
+      el("td", { class: `change ${r.trend}` }, r.change));
+    return row;
+  }));
+}
+
+function renderSelected() {
+  const c = currentList.find((x) => x.code === selectedCode);
+  if (!c) return;
+  $("cards").replaceChildren(renderCard(c));
+  setupConverter(c);
+  showChart(c);
+  renderOverview();
+}
+
+function selectCurrency(code) {
+  if (!currentList.some((c) => c.code === code)) return;
+  selectedCode = code;
+  $("currency").value = code;
+  saveCurrency(code);
+  if (location.hash.replace(/^#/, "") !== code) history.replaceState(null, "", `#${code}`);
+  renderSelected();
+}
+
+/** 依目前的幣別資料重畫（登入／登出、修改目標價後都會呼叫） */
 function renderCurrencies(currencies) {
-  $("cards").replaceChildren(...currencies.map(renderCard));
-  setupConverter(currencies);
-  renderTabs($("chart-tabs"), currencies, (c) => {
-    chartCode = c.code;
-    drawChart(c);
-  }, chartCode);
+  currentList = currencies;
+  selectedCode = pickCurrency(currencies, selectedCode ? `#${selectedCode}` : location.hash, loadSavedCurrency());
+  renderPicker();
+  renderSelected();
 }
 
 async function main() {
@@ -679,6 +818,7 @@ async function main() {
   const plan = bootPlan(window.FX_CONFIG);
   const forcePublic = previewPublic(location.search);
   const url = dataUrl(location.search);
+  dataBase = new URL(url, location.href);
   let data;
   try {
     const res = await fetch(url, { cache: "no-store" });
@@ -696,6 +836,12 @@ async function main() {
   chartWindow = historyWindow(data);
   $("chart-title").textContent = `${chartWindow.label}走勢`;
   if (data.repo_url) $("repo-link").href = data.repo_url;
+  const unsupported = Array.isArray(data.unsupported) ? data.unsupported : [];
+  $("unsupported-note").hidden = unsupported.length === 0;
+  $("unsupported-note").textContent = unsupported.length
+    ? `※ ${unsupported.map((u) => u.name).join("、")}兆豐只提供即期匯率，不支援`
+    : "";
+  window.addEventListener("hashchange", () => selectCurrency(location.hash.replace(/^#/, "").toUpperCase()));
   $("generated-at").textContent = formatTime(data.generated_at);
 
   if (plan.targetsFromDataJson && !forcePublic) {
@@ -726,7 +872,8 @@ async function main() {
 // 瀏覽器裡直接執行；在 Node（測試）裡只匯出純函式
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    dataUrl, previewNow, previewPublic, formatTime, formatDate, timeAgo, formatPct, rateHint, cardView,
+    dataUrl, previewNow, previewPublic, formatTime, formatDate, timeAgo, formatPct, unitHint, cardView,
+    currencyGroups, pickCurrency, taipeiIso, decodeHistory, overviewRows,
     toMinutes, inCheckHours, nextCheck, isStale, statusLine, parseAmount, converterView,
     yRange, formatChange, periodChange, historyWindow, timeTicks, tickLabel,
     markerIndexes, chartSummary, bootPlan, publicCurrencies,

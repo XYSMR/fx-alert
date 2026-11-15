@@ -64,10 +64,16 @@ test("formatPct：小數 1 位四捨五入，不到 0.1% 另外寫", () => {
 
 // ---------- 2. 換算 ----------
 
-test("rateHint：日圓寫 1 台幣換多少，韓元寫 1,000 韓元多少台幣", () => {
-  assert.equal(app.rateHint("0.2119", "日圓"), "1 台幣 ≈ 4.72 日圓");
-  assert.equal(app.rateHint("0.0263", "韓元"), "1,000 韓元 ≈ 26.3 台幣");
-  assert.equal(app.rateHint(null, "日圓"), "");
+test("unitHint：換算單位依匯率大小自動決定", () => {
+  assert.equal(app.unitHint("33.1400", "美元"), "1 美元 ≈ 33.14 台幣");
+  assert.equal(app.unitHint("1.0380", "泰銖"), "1 泰銖 ≈ 1.04 台幣");
+  assert.equal(app.unitHint("0.2107", "日圓"), "100 日圓 ≈ 21.07 台幣・1 台幣 ≈ 4.75 日圓");
+  assert.equal(app.unitHint("0.5840", "菲律賓比索"), "100 菲律賓比索 ≈ 58.40 台幣・1 台幣 ≈ 1.71 菲律賓比索");
+  assert.equal(app.unitHint("0.0264", "韓元"), "1,000 韓元 ≈ 26.40 台幣");
+  assert.equal(app.unitHint("0.0015", "越南盾"), "10,000 越南盾 ≈ 15.00 台幣");
+  assert.equal(app.unitHint("0.0021", "印尼盾"), "10,000 印尼盾 ≈ 21.00 台幣");
+  assert.equal(app.unitHint(null, "日圓"), "");
+  assert.equal(app.unitHint("0", "日圓"), "");
 });
 
 // ---------- 3. 卡片用語（四種狀況） ----------
@@ -283,7 +289,8 @@ test("timeTicks：依實際時間排列，刻度對齊台灣時間，不重複�
 
 test("走勢點的位置跟實際時間成正比：8 分鐘和 8 小時的間隔不一樣寬", () => {
   const data = require("../samples/new.json");
-  const xs = data.currencies[0].history.map(([at]) => Date.parse(at));
+  const hist = app.decodeHistory(require(`../samples/${data.currencies[0].history_url}`));
+  const xs = hist.map(([at]) => Date.parse(at));
   const gaps = xs.slice(1).map((x, i) => x - xs[i]);
   assert.ok(Math.min(...gaps) <= 8 * 60 * 1000);       // 範例裡有手動執行（相隔幾分鐘）
   assert.ok(Math.max(...gaps) >= 8 * 3600 * 1000);     // 也有隔一整晚
@@ -380,4 +387,84 @@ test("沒有目標價：卡片只顯示行情，試算只有「現在換」，�
   assert.doesNotMatch(app.chartSummary({ ...c, history: [["t", "0.2119"]] }), /目標/);
   const r = app.yRange([0.21, 0.212], undefined);
   assert.ok(r.min <= 0.21 && r.max >= 0.212);
+});
+
+// ---------- 選幣別、拆檔 ----------
+
+const SAMPLE = require("../samples/waiting.json");
+
+test("範例資料：全部 18 種幣別，走勢拆到另外的檔案", () => {
+  assert.equal(SAMPLE.currencies.length, 18);
+  for (const c of SAMPLE.currencies) {
+    assert.equal(c.history, undefined);
+    assert.match(c.history_url, /^waiting\/[A-Z]{3}\.json$/);
+    assert.match(c.rate, /^\d+\.\d{4}$/); // 價格都是牌告的 4 位小數
+  }
+  assert.deepEqual(SAMPLE.unsupported.map((u) => u.code), ["ZAR", "SEK"]);
+});
+
+test("currencyGroups：我的提醒 → 常用 → 其他（牌告順序）", () => {
+  const groups = app.currencyGroups(SAMPLE.currencies);
+  assert.deepEqual(groups.map((g) => g.label), ["我的提醒", "常用", "其他"]);
+  // 範例的日圓、韓元有目標價（config.yaml）
+  assert.deepEqual(groups[0].options.map((o) => o.value), ["JPY", "KRW"]);
+  assert.deepEqual(groups[1].options.map((o) => o.value), ["USD", "EUR", "CNY", "HKD", "THB", "SGD"]);
+  assert.equal(groups[2].options[0].value, "GBP");
+  assert.equal(groups[0].options[0].label, "日圓 JPY");
+  assert.equal(groups.flatMap((g) => g.options).length, 18);
+  // 沒登入（沒有目標價）：沒有「我的提醒」，常用的第一個是日圓
+  const pub = app.currencyGroups(app.publicCurrencies(SAMPLE.currencies));
+  assert.deepEqual(pub.map((g) => g.label), ["常用", "其他"]);
+  assert.deepEqual(pub[0].options.slice(0, 3).map((o) => o.value), ["JPY", "KRW", "USD"]);
+});
+
+test("pickCurrency：網址 #代碼 → 上次看的 → 第一個", () => {
+  const list = app.publicCurrencies(SAMPLE.currencies);
+  assert.equal(app.pickCurrency(list, "#VND", "USD"), "VND");
+  assert.equal(app.pickCurrency(list, "#vnd", null), "VND");
+  assert.equal(app.pickCurrency(list, "#ZAR", "USD"), "USD"); // 不支援的幣別 → 退回上次看的
+  assert.equal(app.pickCurrency(list, "", "XXX"), "JPY");
+  assert.equal(app.pickCurrency([], "", null), null);
+});
+
+test("decodeHistory：還原成 [時間, 4 位小數]，和 Python 的壓縮格式互通", () => {
+  assert.equal(app.taipeiIso(Date.parse("2026-11-09T01:05:00Z")), "2026-11-09T09:05:00+08:00");
+  const hist = app.decodeHistory({
+    code: "VND", start: "2026-11-09T09:05:00+08:00", dt: [0, 487, 85913], v: [15, 16, 15],
+  });
+  assert.deepEqual(hist, [
+    ["2026-11-09T09:05:00+08:00", "0.0015"],
+    ["2026-11-09T09:13:07+08:00", "0.0016"],
+    ["2026-11-10T09:05:00+08:00", "0.0015"],
+  ]);
+  assert.deepEqual(app.decodeHistory({ code: "KRW", start: null, dt: [], v: [] }), []);
+  assert.deepEqual(app.decodeHistory(null), []);
+  // 範例檔：最高、最低都是走勢裡真的出現過的點（markerIndexes 找得到）
+  const jpy = SAMPLE.currencies.find((c) => c.code === "JPY");
+  const h = app.decodeHistory(require(`../samples/${jpy.history_url}`));
+  const m = app.markerIndexes(h, jpy.high, jpy.low);
+  assert.equal(h[m.high][1], jpy.high.rate);
+  assert.equal(h[m.low][1], jpy.low.rate);
+  assert.equal(h[h.length - 1][1], jpy.rate);
+});
+
+test("overviewRows：牌告順序、變動百分比", () => {
+  const rows = app.overviewRows(SAMPLE.currencies);
+  assert.equal(rows.length, 18);
+  assert.equal(rows[0].code, "USD");
+  const jpy = rows.find((r) => r.code === "JPY");
+  assert.match(jpy.change, /^[+−]\d+\.\d+%$/);
+  assert.equal(app.overviewRows([{ code: "X", name: "X", rate: null, change_pct: null }])[0].change, "—");
+  assert.equal(app.overviewRows([{ code: "X", name: "X", rate: "1.0000", change_pct: 0 }])[0].trend, "flat");
+});
+
+test("yRange：越南盾、印尼盾這種很小的匯率，刻度不小於 0.0001、不會一整排一樣", () => {
+  for (const rate of ["0.0015", "0.0021", "0.0263"]) {
+    const r = app.yRange([rate, rate, rate], null, rate);
+    assert.ok(r.step >= 0.0001, `${rate} step ${r.step}`);
+    const labels = [];
+    for (let v = r.min; v <= r.max + 1e-12; v += r.step) labels.push(v.toFixed(4));
+    assert.equal(new Set(labels).size, labels.length, `${rate}: ${labels}`);
+    assert.ok(r.min < Number(rate) && r.max > Number(rate));
+  }
 });

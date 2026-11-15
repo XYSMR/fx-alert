@@ -106,6 +106,9 @@ def test_build_data_full(cfg):
     assert jpy == {
         "code": "JPY",
         "name": "日圓",
+        "sort_order": 4,  # 兆豐牌告上的順序
+        "popular_rank": 1,  # 下拉選單「常用」的第一個
+        "change_pct": -4.7,  # 0.2150 → 0.2049（給「全部幣別一覽」用）
         "rate": "0.2049",
         "rate_at": "2026-11-09T16:10:12+08:00",
         "target": "0.2050",  # 價格一律顯示到牌告的小數 4 位
@@ -338,3 +341,77 @@ def test_cli_build_site_public(cfg, tmp_path, capsys):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert public_problems(data) == []
     assert "公開版" in capsys.readouterr().out
+
+
+# ---------- 全部幣別、拆檔 ----------
+
+
+def test_lists_every_currency_with_history_in_board_order(cfg):
+    """多人版記錄了 18 種幣別：沒有設定目標的幣別也列出來（只有行情），依兆豐牌告的順序。"""
+    d = cfg.data_dir
+    append_quotes(
+        d, datetime(2026, 11, 9, 9, 5), {"JPY": D("0.2114"), "VND": D("0.0015"), "USD": D("33.14")}
+    )
+    append_quotes(
+        d, datetime(2026, 11, 9, 9, 35), {"JPY": D("0.2110"), "VND": D("0.0016"), "USD": D("33.10")}
+    )
+    data = build_data(cfg, d, now=NOW)
+    codes = [c["code"] for c in data["currencies"]]
+    assert codes == ["USD", "JPY", "KRW", "VND"]  # KRW 有規則，沒有資料也列出
+    usd = data["currencies"][0]
+    assert usd["rate"] == "33.1000" and "target" not in usd  # 沒有規則：沒有目標價欄位
+    vnd = data["currencies"][3]
+    assert vnd["rate"] == "0.0016" and vnd["change_pct"] == 6.67
+    assert data["unsupported"] == [
+        {"code": "ZAR", "name": "南非幣"},
+        {"code": "SEK", "name": "瑞典幣"},
+    ]
+
+
+def test_compact_history_round_trip():
+    from fx_alert.build_site import compact_history
+
+    hist = [
+        ["2026-11-09T09:05:00+08:00", "0.2114"],
+        ["2026-11-09T09:13:07+08:00", "0.2115"],
+        ["2026-11-10T09:05:00+08:00", "0.2107"],
+    ]
+    c = compact_history("JPY", hist)
+    assert c == {
+        "code": "JPY",
+        "start": "2026-11-09T09:05:00+08:00",
+        "dt": [0, 487, 85913],
+        "v": [2114, 2115, 2107],
+    }
+    assert compact_history("VND", [["2026-11-09T09:05:00+08:00", "0.0015"]])["v"] == [15]
+    assert compact_history("KRW", [])["v"] == []
+    with pytest.raises(ValueError, match="不是牌告的 4 位小數"):
+        compact_history("JPY", [["2026-11-09T09:05:00+08:00", "0.21145"]])
+
+
+def test_write_data_json_splits_history(cfg, tmp_path):
+    import json
+
+    from fx_alert.build_site import history_problems, write_data_json
+
+    seed(cfg)
+    data = build_data(cfg, cfg.data_dir, now=NOW, public=True)
+    out = tmp_path / "site" / "data.json"
+    (tmp_path / "site" / "history").mkdir(parents=True)
+    (tmp_path / "site" / "history" / "OLD.json").write_text("{}", encoding="utf-8")
+    write_data_json(data, out)
+    written = json.loads(out.read_text(encoding="utf-8"))
+    assert all("history" not in c for c in written["currencies"])
+    assert [c["history_url"] for c in written["currencies"]] == [
+        "history/JPY.json",
+        "history/KRW.json",
+    ]
+    files = sorted(p.name for p in (tmp_path / "site" / "history").iterdir())
+    assert files == ["JPY.json", "KRW.json"]  # 舊的走勢檔清掉
+    jpy = json.loads((tmp_path / "site" / "history" / "JPY.json").read_text(encoding="utf-8"))
+    assert jpy["v"] == [2150, 2049] and history_problems(jpy) == []
+    assert history_problems({**jpy, "target": "0.205"}) == ["JPY.target"]
+    # 原本的 data 沒有被改掉（寫檔不影響呼叫端）
+    assert "history" in data["currencies"][0]
+    # 多人版：data.json 只有公開行情
+    assert public_problems(written) == []

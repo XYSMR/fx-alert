@@ -69,7 +69,7 @@ def test_first_run_already_below_target_notifies(tmp_path):
     cfg, n = make_cfg(tmp_path), DryRunNotifier()
     r = check(cfg, n, fetch=lambda: mega_json(jpy="0.2040"))
     assert r.notified == ["JPY"] and r.exit_code == 0
-    assert subjects(n) == ["[FX Alert] JPY 到價：0.2040 ≤ 目標 0.205"]
+    assert subjects(n) == ["[FX Alert] JPY 到價：0.2040 ≤ 目標 0.2050"]
     assert r.state_changed is True
     states = load_states(cfg.state_file)
     assert states["JPY"].state is AlertState.TRIGGERED
@@ -479,3 +479,78 @@ def test_cli_config_error_writes_no_skipped(tmp_path, monkeypatch, capsys):
     assert "skipped=false" not in (
         out_file.read_text(encoding="utf-8") if out_file.exists() else ""
     )
+
+
+# ---------- 多人版：記錄全部 18 種幣別的走勢 ----------
+
+
+SINCE = datetime(2026, 11, 1, tzinfo=TAIPEI)
+
+
+def full_board(drop=(), extra=()):
+    data = json.loads((ROOT / "tests/fixtures/mega_rates_sample.json").read_text(encoding="utf-8"))
+    data["rates"] = [r for r in data["rates"] if r["currKey"].split("|")[0] not in drop]
+    for code in extra:
+        data["rates"].append(
+            {"currKey": f"{code}|99", "cash": {"bid": "1.0000", "ask": "1.1000"}, "spot": {}}
+        )
+    return json.dumps(data)
+
+
+def test_track_records_all_catalog_currencies(tmp_path):
+    from fx_alert.currencies import CODES
+
+    cfg, logs = make_cfg(tmp_path), []
+    r = check(cfg, DryRunNotifier(), fetch=full_board, track=CODES, log=logs.append)
+    assert r.exit_code == 0 and r.errors == []
+    quotes = read_quotes(cfg.data_dir, SINCE)
+    assert {q.currency for q in quotes} == set(CODES)
+    assert {q.currency: str(q.cash_sell) for q in quotes}["VND"] == "0.0015"
+    assert "ZAR" not in {q.currency for q in quotes}  # 只有即期的不記錄
+    assert any("18 種幣別" in line for line in logs)
+
+
+def test_missing_quote_for_tracked_currency_is_only_a_note(tmp_path):
+    """沒人設定的幣別缺報價：只記一行注意，這次不算失敗。"""
+    from fx_alert.currencies import CODES
+
+    cfg, logs = make_cfg(tmp_path), []
+    r = check(
+        cfg, DryRunNotifier(), fetch=lambda: full_board(drop=("VND",)), track=CODES, log=logs.append
+    )
+    assert r.exit_code == 0 and r.errors == []
+    assert any("VND" in line and "注意" in line for line in logs)
+    assert "VND" not in {q.currency for q in read_quotes(cfg.data_dir, SINCE)}
+
+
+def test_missing_quote_for_currency_with_rule_is_an_error(tmp_path):
+    """有人設定規則的幣別缺報價：算錯誤（可能漏通知），其他幣別照常。"""
+    from fx_alert.currencies import CODES
+
+    cfg = make_cfg(tmp_path)
+    r = check(cfg, DryRunNotifier(), fetch=lambda: full_board(drop=("KRW",)), track=CODES)
+    assert r.exit_code == 1 and any("KRW" in e for e in r.errors)
+    assert "JPY" in {q.currency for q in read_quotes(cfg.data_dir, SINCE)}
+
+
+def test_unknown_new_currency_on_board_is_noted(tmp_path):
+    from fx_alert.currencies import CODES
+
+    cfg, logs = make_cfg(tmp_path), []
+    r = check(
+        cfg,
+        DryRunNotifier(),
+        fetch=lambda: full_board(extra=("XAU",)),
+        track=CODES,
+        log=logs.append,
+    )
+    assert r.exit_code == 0
+    assert any("尚未支援的幣別 XAU" in line for line in logs)
+    assert not any("ZAR" in line or "SEK" in line for line in logs)  # 已知只有即期的不提
+
+
+def test_single_mode_still_records_only_config_currencies(tmp_path):
+    """單人版（退回方案）不受影響：只記錄 config.yaml 的幣別。"""
+    cfg = make_cfg(tmp_path)
+    check(cfg, DryRunNotifier(), fetch=full_board)
+    assert {q.currency for q in read_quotes(cfg.data_dir, SINCE)} == {"JPY", "KRW"}

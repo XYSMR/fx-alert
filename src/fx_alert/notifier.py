@@ -25,6 +25,7 @@ from decimal import Decimal
 from email.message import EmailMessage
 from typing import Protocol
 
+from fx_alert.currencies import format_price
 from fx_alert.rules import Rule
 from fx_alert.unsubscribe import UnsubscribeLinks
 
@@ -106,7 +107,8 @@ def build_alert_message(
     """
     when = quoted_at.strftime("%Y-%m-%d %H:%M") if quoted_at else "（銀行未提供）"
     msg = EmailMessage()
-    msg["Subject"] = f"[FX Alert] {rule.currency} 到價：{rate} ≤ 目標 {rule.target}"
+    target, rearm = format_price(rule.target), format_price(rule.rearm_above)
+    msg["Subject"] = f"[FX Alert] {rule.currency} 到價：{format_price(rate)} ≤ 目標 {target}"
     msg["From"] = cfg.user
     msg["To"] = ", ".join(cfg.to if to is None else to)
     msg.set_content(
@@ -114,12 +116,12 @@ def build_alert_message(
             [
                 f"{rule.currency} 的{BANK_LABEL}價已達到你設定的目標。",
                 "",
-                f"  目前匯率：{rate}",
-                f"  目標匯率：≤ {rule.target}",
+                f"  目前匯率：{format_price(rate)}",
+                f"  目標匯率：≤ {target}",
                 f"  牌告時間：{when}",
                 "",
                 "這次到價只會通知一次；",
-                f"匯率回升到 > {rule.rearm_above} 之後再跌回目標，才會再通知。",
+                f"匯率回升到 > {rearm} 之後再跌回目標，才會再通知。",
                 "",
                 f"兆豐銀行牌告匯率：{RATE_PAGE}",
                 "",

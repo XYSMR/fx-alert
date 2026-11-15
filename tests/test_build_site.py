@@ -108,9 +108,9 @@ def test_build_data_full(cfg):
         "name": "日圓",
         "rate": "0.2049",
         "rate_at": "2026-11-09T16:10:12+08:00",
-        "target": "0.205",
-        "buffer": "0.001",
-        "rearm_above": "0.206",
+        "target": "0.2050",  # 價格一律顯示到牌告的小數 4 位
+        "buffer": "0.0010",
+        "rearm_above": "0.2060",
         "distance_pct": -0.049,
         "status": "triggered",
         "status_since": "2026-11-09T16:12:10+08:00",
@@ -149,7 +149,7 @@ def test_target_comes_from_current_config_not_state(cfg):
 
     lowered = replace(cfg, rules=(Rule("JPY", D("0.203"), D("0.001")), cfg.rules[1]))
     jpy = build_data(lowered, cfg.data_dir, now=NOW)["currencies"][0]
-    assert jpy["target"] == "0.203" and jpy["distance_pct"] == 0.927
+    assert jpy["target"] == "0.2030" and jpy["distance_pct"] == 0.927
 
 
 def test_empty_data_dir_first_deploy(cfg):

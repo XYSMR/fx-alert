@@ -7,7 +7,8 @@
 "use strict";
 
 const SCALE = 1000000n; // 小數 6 位
-const DEFAULT_BUFFER_PERMILLE = 5n; // 沒填回升門檻時：目標價的 0.5%
+const TICK = 100n; // 兆豐牌告的報價單位 0.0001（每個幣別都是小數 4 位）
+const PRICE_DECIMALS = 4;
 const FAR_FROM_RATE = 0.3; // 目標價和現價差超過 30% 就再確認一次
 const MAX_TARGET = 1000n * SCALE;
 const CONFIRM_TEXT = "刪除我的帳號";
@@ -40,9 +41,26 @@ function decimalsOf(rate) {
   return m ? Math.min(m[1].length, 6) : 4;
 }
 
-/** 沒填回升門檻時用的值：目標價的 0.5%，四捨五入到 6 位（和資料庫 round() 一樣） */
+/**
+ * 沒填回升門檻時用的值：目標價的 0.5%，四捨五入到報價單位 0.0001，至少 0.0001。
+ * 和資料庫 alert_rules.effective_buffer、Python 的 currencies.auto_buffer() 一致。
+ * 例：日圓 0.205 → 0.0010；越南盾 0.0015 → 0.0001（不會變成 0.0000075）
+ */
 function autoBuffer(targetMicros) {
-  return (targetMicros * DEFAULT_BUFFER_PERMILLE + 500n) / 1000n;
+  const ticks = (targetMicros * 5n + 50000n) / 100000n; // 0.5% 換成報價單位，四捨五入
+  const v = ticks * TICK;
+  return v < TICK ? TICK : v;
+}
+
+/** 回升門檻上限：目標價的 10%，但至少允許一個報價單位 */
+function maxBuffer(targetMicros) {
+  const max = targetMicros / 10n;
+  return max < TICK ? TICK : max;
+}
+
+/** 價格一律顯示到牌告的位數（小數 4 位），四捨五入 */
+function formatPrice(micros) {
+  return formatDec(((micros + TICK / 2n) / TICK) * TICK, PRICE_DECIMALS);
 }
 
 function effectiveBuffer(targetMicros, bufferMicros) {
@@ -63,22 +81,29 @@ function rearmText(targetMicros, bufferMicros, decimals) {
   return `匯率回升到 ${rearmQuote(targetMicros, bufferMicros, decimals)} 以上，才會再提醒你`;
 }
 
-/** 目標價輸入檢查 */
+/** 目標價輸入檢查：兆豐牌告只到小數第 4 位，目標價也最多 4 位小數 */
 function validateTarget(text) {
   const micros = parseDec(text);
-  if (micros === null) return { error: "請輸入數字，例如 0.205（最多 6 位小數）" };
+  if (micros === null) return { error: "請輸入數字，例如 0.205（最多 4 位小數）" };
+  if (micros % TICK !== 0n) return { error: "兆豐牌告只到小數第 4 位，目標價最多 4 位小數" };
   if (micros <= 0n) return { error: "目標價必須大於 0" };
   if (micros >= MAX_TARGET) return { error: "目標價太大了，請確認是「1 外幣要付幾元台幣」" };
   return { micros, value: formatDec(micros) };
 }
 
-/** 回升門檻輸入檢查：空白 = 自動（目標價的 0.5%）；最多是目標價的 10% */
+/**
+ * 回升門檻輸入檢查：空白 = 自動（目標價的 0.5%）。
+ * 至少一個報價單位 0.0001、最多 4 位小數；最多是目標價的 10%（但至少允許 0.0001）。
+ */
 function validateBuffer(text, targetMicros) {
   if (String(text ?? "").trim() === "") return { micros: null, value: null };
   const micros = parseDec(text);
   if (micros === null) return { error: "回升門檻請輸入數字，或留空使用預設值" };
-  const max = targetMicros / 10n;
-  if (micros > max) return { error: `回升門檻最多是目標價的 10%（${formatDec(max)}）` };
+  if (micros < TICK || micros % TICK !== 0n) {
+    return { error: "回升門檻至少 0.0001（一個報價單位），最多 4 位小數" };
+  }
+  const max = maxBuffer(targetMicros);
+  if (micros > max) return { error: `回升門檻最多是目標價的 10%（${formatPrice(max)}）` };
   return { micros, value: formatDec(micros) };
 }
 
@@ -122,8 +147,8 @@ function personalCurrencies(publicList, rules, profile) {
     const rearm = target + effectiveBuffer(target, buffer);
     return {
       ...c,
-      target: formatDec(target),
-      rearm_above: formatDec(rearm),
+      target: formatPrice(target),
+      rearm_above: formatPrice(rearm),
       distance_pct: distancePct(c.rate, target),
       status: r.state === "triggered" ? "triggered" : "waiting",
       status_since: r.state_changed_at ?? null,
@@ -555,7 +580,8 @@ async function start(auth, currencies, onChange) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    parseDec, formatDec, decimalsOf, autoBuffer, effectiveBuffer, rearmQuote, rearmText,
+    parseDec, formatDec, formatPrice, decimalsOf, autoBuffer, maxBuffer, effectiveBuffer,
+    rearmQuote, rearmText,
     validateTarget, validateBuffer, farFromRateMessage, availableCurrencies, distancePct,
     personalCurrencies, ruleStatusText, errorMessage, normalizeConfirm, isConfirmed,
     isAccountGone, deleteErrorMessage, CONFIRM_TEXT,

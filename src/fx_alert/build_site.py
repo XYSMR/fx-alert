@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from fx_alert.config import CURRENCY_NAMES, TAIPEI, AppConfig
+from fx_alert.currencies import format_price
 from fx_alert.history import first_quote_at, read_alerts, read_last_check, read_quotes
 from fx_alert.notifier import BANK_LABEL, RATE_PAGE
 from fx_alert.rules import AlertState
@@ -131,9 +132,9 @@ def build_data(
                 "name": CURRENCY_NAMES.get(rule.currency, rule.currency),
                 "rate": str(latest.cash_sell) if latest else None,
                 "rate_at": _iso(latest.quoted_at) if latest else None,
-                "target": str(rule.target),
-                "buffer": str(rule.buffer),
-                "rearm_above": str(rule.rearm_above),
+                "target": format_price(rule.target),
+                "buffer": format_price(rule.buffer),
+                "rearm_above": format_price(rule.rearm_above),
                 "distance_pct": distance_pct(latest.cash_sell, rule.target) if latest else None,
                 "status": STATUS[entry.state] if entry else "waiting",
                 "status_since": entry.changed_at if entry else None,

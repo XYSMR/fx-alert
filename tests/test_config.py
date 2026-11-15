@@ -35,8 +35,45 @@ def test_yaml_floats_become_exact_decimals(tmp_path):
     assert rule.target == D("0.205") and rule.buffer == D("0.001")
 
 
-def test_default_buffer_is_zero():
-    assert parse_config(base(currencies={"JPY": {"target": "0.2"}})).rules[0].buffer == D("0")
+def test_default_buffer_is_auto_half_percent_on_tick():
+    """沒寫 buffer：和網頁一樣自動用目標價的 0.5%，四捨五入到 0.0001，至少 0.0001。"""
+    rules = parse_config(
+        base(
+            currencies={
+                "JPY": {"target": "0.205"},
+                "VND": {"target": "0.0015"},
+                "USD": {"target": "32.5"},
+            }
+        )
+    ).rules
+    assert [r.buffer for r in rules] == [D("0.0010"), D("0.0001"), D("0.1625")]
+    assert rules[1].rearm_above == D("0.0016")  # 不會出現 0.0015075
+
+
+@pytest.mark.parametrize(
+    ("spec", "msg"),
+    [
+        ({"target": "0.20505"}, "最多寫 4 位小數"),
+        ({"target": "0.0015", "buffer": "0.00005"}, "至少要一個報價單位"),
+        ({"target": "0.205", "buffer": "0.0"}, "至少要一個報價單位"),
+        ({"target": "0.205", "buffer": "0.00105"}, "最多 4 位小數"),
+        ({"target": "0.205", "buffer": "0.0206"}, "不應超過目標價的 10%"),
+    ],
+)
+def test_target_and_buffer_must_be_on_tick(spec, msg):
+    with pytest.raises(ConfigFileError, match=msg):
+        parse_config(base(currencies={"JPY": spec}))
+
+
+def test_tiny_target_still_allows_one_tick_buffer():
+    """越南盾目標 0.0010：10% 只有 0.0001，仍然可以設一個報價單位。"""
+    rule = parse_config(base(currencies={"VND": {"target": "0.0010", "buffer": "0.0001"}})).rules[0]
+    assert rule.rearm_above == D("0.0011")
+
+
+def test_spot_only_currencies_are_not_supported():
+    with pytest.raises(ConfigFileError, match="只提供即期匯率"):
+        parse_config(base(currencies={"ZAR": {"target": "2.0"}}))
 
 
 # ---------- CI 用的格式驗證：失敗就不能合併、不能部署 ----------

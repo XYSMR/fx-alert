@@ -1,0 +1,15 @@
+# 自動部署（deploy-migrations workflow）開始之前，已經手動套用到正式專案的 migration。
+#
+# 資料庫的 supabase_migrations.schema_migrations 沒有紀錄的版本，部署時會用
+# `supabase migration repair --status applied` 只補上紀錄，不會重新執行。
+# 2026-11-16 確認：正式專案和 staging 都有前 5 筆紀錄；後 2 筆（pg_cron 外部觸發）
+# 是在 SQL Editor 手動套用的，沒有紀錄。
+#
+# 之後新增的 migration 不要加進這裡，交給部署 workflow 套用。
+20261109000000
+20261109010000
+20261109020000
+20261110000000
+20261110010000
+20261110020000
+20261111000000

@@ -1,0 +1,86 @@
+name: deploy-migrations
+
+# 合併到 main 後，把 supabase/migrations 裡還沒套用的 migration 套用到「正式專案」。
+# 使用 GitHub Environment「production」：設定了必要審核者，按下核准才會執行。
+#
+# 流程（任何一步失敗就停止）：
+#   1. plan      比對資料庫紀錄：哪些要補紀錄（以前手動套用過）、哪些要套用（只讀）
+#   2. precheck  要補紀錄的版本：supabase/baseline_checks/<版本>_*.sql 的物件都要存在（只讀）
+#                待套用的版本：supabase/prechecks/<版本>_*.sql 必須回傳 0 列（只讀）
+#   3. repair    補上手動套用過的版本紀錄（只寫紀錄，不執行 SQL）
+#   4. db push   依序套用 migration（Supabase CLI，每個 migration 一個交易）
+#   5. verify    確認 repo 裡的 migration 都已套用（只讀）
+#
+# 連線字串只在需要的 step 透過 env 傳入，不放在 job 層級（安裝套件等步驟拿不到），也不印出來。
+
+# 只有 migration 或事前檢查有變動才觸發；改前端、文件、其他程式都不會。也可以手動執行。
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/migrations/**"
+      - "supabase/prechecks/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-migrations
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 套用 migration 到正式專案
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: |
+          python -m pip install -e ".[db]"
+          npx --yes supabase@3.0.0 --version
+
+      - name: 1. 比對 migration 紀錄（只讀）
+        id: plan
+        env:
+          DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: python -m fx_alert.migrations_deploy plan
+
+      - name: 2. 事前檢查（只讀；物件不存在或資料不符合就停止，什麼都不寫）
+        if: steps.plan.outputs.repair != '' || steps.plan.outputs.pending != ''
+        env:
+          DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: python -m fx_alert.migrations_deploy precheck
+
+      - name: 3. 補上手動套用過的版本紀錄
+        if: steps.plan.outputs.repair != ''
+        env:
+          DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+          REPAIR: ${{ steps.plan.outputs.repair }}
+        # REPAIR 只會是 14 位數字的版本號（migrations_deploy 驗證過），刻意不加引號讓它拆成多個參數
+        run: npx --yes supabase@3.0.0 migration repair --status applied $REPAIR --remote="$DB_URL" --yes
+
+      - name: 4. 套用 migration
+        if: steps.plan.outputs.pending != ''
+        env:
+          DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: npx --yes supabase@3.0.0 db push --remote="$DB_URL" --skip-vault --yes
+
+      - name: 5. 確認（只讀）
+        env:
+          DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
+        run: python -m fx_alert.migrations_deploy verify

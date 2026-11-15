@@ -1,6 +1,7 @@
 """GitHub Actions 設定檢查：多人版切換後的排程、部署、保活。"""
 
 import json
+import re
 from pathlib import Path
 
 WF = Path(__file__).resolve().parents[1] / ".github/workflows"
@@ -154,3 +155,58 @@ def test_source_input_for_pg_cron():
         "options": ["manual", "pg_cron"],
         "default": "manual",
     }
+
+
+# ---------- deploy-migrations：正式專案的 migration 部署 ----------
+
+
+def test_deploy_migrations_needs_production_approval():
+    wf = read("deploy-migrations.yml")
+    assert "environment: production" in wf  # 必要審核者在 GitHub Environment 設定
+    assert "branches: [main]" in wf and "if: github.ref == 'refs/heads/main'" in wf
+    assert "workflow_dispatch:" in wf
+    assert "cancel-in-progress: false" in wf  # 不能中途取消一半的部署
+    assert "permissions:\n  contents: read" in wf
+
+
+def test_deploy_migrations_checks_before_writing():
+    """順序：比對 → 事前檢查 → 補紀錄 → 套用 → 確認；寫入（npx supabase）一定在事前檢查之後。"""
+    wf = read("deploy-migrations.yml").split("steps:", 1)[1]  # 只看 steps，不看開頭的說明
+    order = [
+        "migrations_deploy plan",
+        "migrations_deploy precheck",
+        "migration repair --status applied",
+        "db push",
+        "migrations_deploy verify",
+    ]
+    positions = [wf.index(s) for s in order]
+    assert positions == sorted(positions)
+    # 要補紀錄（只有 repair）時也要先跑檢查，確認物件存在
+    assert "if: steps.plan.outputs.repair != '' || steps.plan.outputs.pending != ''" in wf
+
+
+def test_deploy_migrations_db_url_only_in_steps_that_need_it():
+    wf = read("deploy-migrations.yml")
+    job_header = wf.split("steps:")[0]
+    assert "DB_URL" not in job_header.split("jobs:")[1]  # 不放在 job 層級：安裝套件的步驟拿不到
+    assert wf.count("DB_URL: ${{ secrets.PRODUCTION_DB_URL }}") == 5
+    for line in wf.splitlines():
+        assert not re.search(r"echo .*DB_URL", line), line
+
+
+def test_deploy_migrations_uses_same_cli_version_as_ci():
+    ci, wf = read("ci.yml"), read("deploy-migrations.yml")
+    versions = set(re.findall(r"supabase@(\d+\.\d+\.\d+)", ci + wf))
+    assert len(versions) == 1, versions
+
+
+def test_deploy_migrations_triggers_only_on_migration_changes():
+    """只有 supabase/migrations/** 或 supabase/prechecks/** 有變動、或手動執行才觸發；
+    改前端、文件、其他程式、物件檢查（baseline_checks）都不會。"""
+    wf = read("deploy-migrations.yml")
+    on = wf.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+    triggers = re.findall(r"^  (\w+):", on, re.M)
+    assert triggers == ["push", "workflow_dispatch"]
+    paths = re.findall(r'^      - "(.+)"$', on, re.M)
+    assert paths == ["supabase/migrations/**", "supabase/prechecks/**"]
+    assert "paths-ignore" not in on and "branches: [main]" in on

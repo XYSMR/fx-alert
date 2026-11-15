@@ -120,6 +120,7 @@ pg_cron 的排程寫在 `supabase/migrations/20261110020000_dispatch_check_rates
 | `ci` | push、PR | validate-config＋防外洩、ruff、pytest、前端測試、Deno（Edge Functions）、資料庫 RLS 測試（真正的 Supabase） |
 | `staging-check` | 手動、staging 的 pg_cron | 用 staging 的 Supabase 跑一次（預設只讀；勾 `send` 才真的寄信） |
 | `keepalive` | 每週日、手動 | 讀一次公開幣別清單 |
+| `deploy-migrations` | push 到 main 且 `supabase/migrations/**` 或 `supabase/prechecks/**` 有變更、手動（改前端、文件不會觸發） | **需要核准**（Environment `production`）→ 事前檢查 → 套用 migration 到正式專案，見〈[資料庫變更](#資料庫變更)〉 |
 
 ## 設定一覽
 
@@ -136,6 +137,14 @@ repo 是公開的：**有權限的金鑰只放 Secrets、Edge Function Secrets�
 | `SMTP_PASSWORD` | Gmail **應用程式密碼**（帳號需開啟兩步驟驗證） |
 | `HEALTHCHECK_PING_URL` | （選用）healthchecks.io 的 ping 網址；等同密碼 |
 | `STAGING_SUPABASE_URL`、`STAGING_SUPABASE_SECRET_KEY`、`STAGING_UNSUBSCRIBE_SECRET` | 只給 `staging-check` 用 |
+
+### GitHub Environment `production`（Settings → Environments）
+
+| 設定 | 內容 |
+|---|---|
+| Required reviewers | 自己（`XYSMR`）：`deploy-migrations` 要按核准才會執行 |
+| Deployment branches and tags | Selected branches → `main` |
+| Environment secret `PRODUCTION_DB_URL` | 正式專案資料庫的 **Session pooler** 連線字串（含資料庫密碼）。只有核准後的 `deploy-migrations` 拿得到；**不要**設成一般的 repository secret，也不要叫 `SUPABASE_DB_URL`（那是 `tests/db` 用的名稱，測試會清空資料表） |
 
 ### GitHub Variables（同一頁的 Variables 分頁）
 
@@ -365,9 +374,49 @@ python -m http.server 8000 -d site         # 開 http://localhost:8000/
 
 ### 資料庫變更
 
-migration 放在 `supabase/migrations/`，目前**手動**在 Supabase 的 SQL Editor 套用：先 staging、驗證後再正式專案。
-有依賴 workflow 的 migration（例如 pg_cron 送出的 inputs）要**先合併 workflow 的 PR，再套用 migration**。
-（之後會改成 GitHub Actions 部署，正式專案需要核准。）
+migration 放在 `supabase/migrations/`，檔名 `<14 位數字版本號>_<名稱>.sql`。
+
+1. **PR**：CI 在本機 Supabase 套用全部 migration 並跑 RLS 測試。
+2. **staging**：合併前，在 staging 的 SQL Editor 套用並驗證。
+3. **正式專案**：合併到 main 後（`supabase/migrations/**` 或 `supabase/prechecks/**` 有變更才會觸發），
+   `deploy-migrations` 自動啟動，**等你在 Actions 頁面按核准**才執行：
+   1. 比對 repo 和資料庫的紀錄（`supabase_migrations.schema_migrations`），算出要補紀錄、要套用哪些版本（只讀）
+   2. **事前檢查**（只讀；任何一項沒通過就停止，什麼都不寫）
+      - 要補紀錄的版本：`supabase/baseline_checks/<版本號>_*.sql` 確認那個 migration 建立的物件真的存在
+        （例如 pg_cron 的 dispatch 函式、`fx-alert-dispatch` 兩個 cron job）；物件不存在、查詢出錯、或沒有檢查檔都會停止，
+        避免「其實沒套用、卻被標成已套用」
+      - 待套用的版本：`supabase/prechecks/<版本號>_*.sql` 回傳任何一列就停止（log 只印列數，不印內容）
+   3. 補上以前手動套用、但沒有紀錄的版本（`supabase/migrations_baseline.txt`；只寫紀錄，不重新執行）
+   4. `supabase db push` 依序套用（Supabase CLI，和 CI 同一個版本）
+   5. 再比對一次，確認沒有遺漏
+
+**核准前先想一下時機**：有依賴 workflow 或前端的 migration（例如 pg_cron 送出的 inputs），
+要等相關的程式也合併、部署好再核准；反過來，程式要用到新欄位的，先核准 migration 再合併程式。
+可以先不核准，等時機對了再到 Actions → `deploy-migrations` 那一次執行按 **Review deployments → Approve**；
+也可以按 Reject，之後用 **Run workflow** 手動重跑。
+
+**加了新限制的 migration**（check constraint、not null 等），請一起寫事前檢查
+`supabase/prechecks/<版本號>_<名稱>.sql`：一段 select，列出「不符合新限制」的資料（應該回傳 0 列）。
+事前檢查失敗時，到 SQL Editor 執行同一段 SQL 找出資料、修正後重跑。
+
+`migrations_baseline.txt` 只記錄自動部署開始前手動套用的 7 個版本，**之後的 migration 不要加進去**；
+每個版本都要有一個 `supabase/baseline_checks/` 物件檢查（每列回傳 `item`、`ok`），測試會確認。
+
+**第一次設定**（只做一次）：
+
+1. Settings → Environments → **New environment** → 名稱 `production`
+   - **Required reviewers**：勾選、加入自己
+   - **Deployment branches and tags**：Selected branches and tags → 加入 `main`
+2. 取得連線字串：Supabase 正式專案 → 上方 **Connect** → **Connection string** →
+   Type 選 **URI**、Method 選 **Session pooler**，複製
+   `postgresql://postgres.<專案代號>:[YOUR-PASSWORD]@aws-…pooler.supabase.com:5432/postgres`
+   - 用 **Session pooler**（port 5432）：GitHub Actions 的機器只有 IPv4，Direct connection 在免費方案只有 IPv6；
+     Transaction pooler（port 6543）不適合跑 migration
+   - `[YOUR-PASSWORD]` 換成資料庫密碼。忘記的話：Project Settings → Database → **Reset database password**
+     （這個專案只有部署 migration 會用到資料庫密碼，重設不影響排程和網站）。
+     建議只用英數字，否則特殊字元要做 URL 編碼
+3. 在 `production` environment 新增 **Environment secret** `PRODUCTION_DB_URL`，貼上第 2 步的完整字串
+4. Actions → `deploy-migrations` → **Run workflow** → 核准 → log 應顯示要補紀錄的版本，最後「確認完成」
 
 ## 退回單人版
 

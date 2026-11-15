@@ -132,3 +132,38 @@ def test_recorded_versions_requires_supabase_history_table():
     assert md.recorded_versions(_FakeConn(_FakeCursor(True, [V1, V2]))) == {V1, V2}
     with pytest.raises(DeployError, match="schema_migrations"):
         md.recorded_versions(_FakeConn(_FakeCursor(False, [])))
+
+
+# ---------- 補紀錄前：物件必須真的存在 ----------
+
+
+def test_every_baseline_version_has_one_object_check():
+    baseline = md.read_baseline()
+    files = sorted(md.BASELINE_CHECKS_DIR.glob("*.sql"))
+    versions = [f.name[:14] for f in files]
+    assert versions == baseline, "基準清單的每個版本都要有一個、而且只有一個物件檢查"
+    for path in files:
+        sql = re.sub(r"--.*", "", path.read_text(encoding="utf-8")).strip().lower()
+        assert sql.startswith(("select", "with")), f"{path.name} 必須是一段 select"
+        assert ";" not in sql.rstrip(";"), f"{path.name} 只能有一段 SQL"
+        for word in ("insert", "update", "delete", "drop", "alter", "truncate", "grant"):
+            assert not re.search(rf"\b{word}\b", sql), f"{path.name} 不能有 {word}"
+        assert " as item" in sql and " as ok" in sql, f"{path.name} 要回傳 (item, ok)"
+
+
+def test_pg_cron_object_check_covers_function_and_both_jobs():
+    sql = md.baseline_check_path("20261110020000").read_text(encoding="utf-8")
+    for name in (
+        "private.dispatch_check_rates()",
+        "private.dispatch_inputs(text)",
+        "jobname = 'fx-alert-dispatch'",
+        "jobname = 'fx-alert-dispatch-1605'",
+        "net",
+    ):
+        assert name in sql, name
+
+
+def test_failed_items():
+    assert md.failed_items([("a", True), ("b", True)]) == []
+    assert md.failed_items([("a", True), ("cron job x", False), ("c", None)]) == ["cron job x", "c"]
+    assert md.failed_items([]) == ["（檢查沒有回傳任何一列）"]  # 沒有結果不能當作通過

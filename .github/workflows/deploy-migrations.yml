@@ -5,20 +5,21 @@ name: deploy-migrations
 #
 # 流程（任何一步失敗就停止）：
 #   1. plan      比對資料庫紀錄：哪些要補紀錄（以前手動套用過）、哪些要套用（只讀）
-#   2. precheck  每個待套用版本的 supabase/prechecks/<版本>_*.sql 必須回傳 0 列（只讀）
+#   2. precheck  要補紀錄的版本：supabase/baseline_checks/<版本>_*.sql 的物件都要存在（只讀）
+#                待套用的版本：supabase/prechecks/<版本>_*.sql 必須回傳 0 列（只讀）
 #   3. repair    補上手動套用過的版本紀錄（只寫紀錄，不執行 SQL）
 #   4. db push   依序套用 migration（Supabase CLI，每個 migration 一個交易）
 #   5. verify    確認 repo 裡的 migration 都已套用（只讀）
 #
 # 連線字串只在需要的 step 透過 env 傳入，不放在 job 層級（安裝套件等步驟拿不到），也不印出來。
 
+# 只有 migration 或事前檢查有變動才觸發；改前端、文件、其他程式都不會。也可以手動執行。
 on:
   push:
     branches: [main]
     paths:
       - "supabase/migrations/**"
       - "supabase/prechecks/**"
-      - "supabase/migrations_baseline.txt"
   workflow_dispatch:
 
 permissions:
@@ -59,8 +60,8 @@ jobs:
           DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
         run: python -m fx_alert.migrations_deploy plan
 
-      - name: 2. 事前檢查（只讀；有不符合的資料就停止，不套用）
-        if: steps.plan.outputs.pending != ''
+      - name: 2. 事前檢查（只讀；物件不存在或資料不符合就停止，什麼都不寫）
+        if: steps.plan.outputs.repair != '' || steps.plan.outputs.pending != ''
         env:
           DB_URL: ${{ secrets.PRODUCTION_DB_URL }}
         run: python -m fx_alert.migrations_deploy precheck

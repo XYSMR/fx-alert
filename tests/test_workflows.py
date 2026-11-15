@@ -164,7 +164,7 @@ def test_deploy_migrations_needs_production_approval():
     wf = read("deploy-migrations.yml")
     assert "environment: production" in wf  # 必要審核者在 GitHub Environment 設定
     assert "branches: [main]" in wf and "if: github.ref == 'refs/heads/main'" in wf
-    assert '"supabase/migrations/**"' in wf and "workflow_dispatch:" in wf
+    assert "workflow_dispatch:" in wf
     assert "cancel-in-progress: false" in wf  # 不能中途取消一半的部署
     assert "permissions:\n  contents: read" in wf
 
@@ -181,7 +181,8 @@ def test_deploy_migrations_checks_before_writing():
     ]
     positions = [wf.index(s) for s in order]
     assert positions == sorted(positions)
-    assert "steps.plan.outputs.pending != ''" in wf
+    # 要補紀錄（只有 repair）時也要先跑檢查，確認物件存在
+    assert "if: steps.plan.outputs.repair != '' || steps.plan.outputs.pending != ''" in wf
 
 
 def test_deploy_migrations_db_url_only_in_steps_that_need_it():
@@ -197,3 +198,15 @@ def test_deploy_migrations_uses_same_cli_version_as_ci():
     ci, wf = read("ci.yml"), read("deploy-migrations.yml")
     versions = set(re.findall(r"supabase@(\d+\.\d+\.\d+)", ci + wf))
     assert len(versions) == 1, versions
+
+
+def test_deploy_migrations_triggers_only_on_migration_changes():
+    """只有 supabase/migrations/** 或 supabase/prechecks/** 有變動、或手動執行才觸發；
+    改前端、文件、其他程式、物件檢查（baseline_checks）都不會。"""
+    wf = read("deploy-migrations.yml")
+    on = wf.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+    triggers = re.findall(r"^  (\w+):", on, re.M)
+    assert triggers == ["push", "workflow_dispatch"]
+    paths = re.findall(r'^      - "(.+)"$', on, re.M)
+    assert paths == ["supabase/migrations/**", "supabase/prechecks/**"]
+    assert "paths-ignore" not in on and "branches: [main]" in on

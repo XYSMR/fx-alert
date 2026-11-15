@@ -7,7 +7,7 @@
 
 用法（連線字串放在環境變數 DB_URL，永遠不印出來）：
     python -m fx_alert.migrations_deploy plan       # 算出要補紀錄、要套用的版本，寫到 GITHUB_OUTPUT
-    python -m fx_alert.migrations_deploy precheck   # 跑待套用版本的 supabase/prechecks/<版本>_*.sql
+    python -m fx_alert.migrations_deploy precheck   # 補紀錄前確認物件存在＋待套用版本的事前檢查
     python -m fx_alert.migrations_deploy verify     # 套用後確認沒有遺漏
 
 事前檢查（precheck）
@@ -17,6 +17,9 @@
 
 基準清單（supabase/migrations_baseline.txt）
   自動部署開始之前，已經手動套用到正式專案的版本。紀錄裡沒有的會用 repair 補上紀錄，不會重新執行。
+  補紀錄之前，先跑 supabase/baseline_checks/<版本>_*.sql 確認這個版本建立的物件真的存在
+  （函式、cron job…）：每一列 (item, ok) 都要是 true，有任何 false、查詢出錯、或沒有檢查檔就停止。
+  避免「其實沒套用、卻被標成已套用」，之後永遠不會再套用。
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ from urllib.parse import unquote, urlsplit
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_DIR = ROOT / "supabase" / "migrations"
 PRECHECKS_DIR = ROOT / "supabase" / "prechecks"
+BASELINE_CHECKS_DIR = ROOT / "supabase" / "baseline_checks"
 BASELINE_FILE = ROOT / "supabase" / "migrations_baseline.txt"
 
 MIGRATION_FILE = re.compile(r"^(\d{14})_([a-z0-9_]+)\.sql$")
@@ -98,11 +102,26 @@ def make_plan(local: list[str], recorded: set[str], baseline: list[str]) -> Plan
     return Plan(repair=repair, pending=pending)
 
 
-def precheck_path(version: str, prechecks_dir: Path = PRECHECKS_DIR) -> Path | None:
-    matches = sorted(prechecks_dir.glob(f"{version}_*.sql")) if prechecks_dir.exists() else []
+def _check_file(version: str, folder: Path) -> Path | None:
+    matches = sorted(folder.glob(f"{version}_*.sql")) if folder.exists() else []
     if len(matches) > 1:
-        raise DeployError(f"{version} 有不只一個事前檢查檔")
+        raise DeployError(f"{version} 在 {folder.name} 有不只一個檢查檔")
     return matches[0] if matches else None
+
+
+def precheck_path(version: str, prechecks_dir: Path = PRECHECKS_DIR) -> Path | None:
+    return _check_file(version, prechecks_dir)
+
+
+def baseline_check_path(version: str, folder: Path = BASELINE_CHECKS_DIR) -> Path | None:
+    return _check_file(version, folder)
+
+
+def failed_items(rows: list[tuple]) -> list[str]:
+    """物件檢查的結果 (item, ok)：回傳沒通過的項目；一列都沒有也算沒通過。"""
+    if not rows:
+        return ["（檢查沒有回傳任何一列）"]
+    return [str(item) for item, ok in rows if ok is not True]
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +179,25 @@ def run_precheck(conn, sql: str) -> int:
     return count
 
 
+def run_object_check(conn, sql: str) -> list[str]:
+    """在唯讀交易裡執行物件檢查，回傳沒通過的項目（空 list = 全部存在）。
+
+    查詢本身出錯（例如 cron schema 根本不存在）也算沒通過。
+    """
+    import psycopg
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"set local statement_timeout = '{PRECHECK_TIMEOUT}'")
+            cur.execute(sql)
+            rows = cur.fetchall()
+    except psycopg.Error as exc:
+        conn.rollback()
+        return [f"檢查查詢出錯：{str(exc).splitlines()[0]}"]
+    conn.rollback()
+    return failed_items(rows)
+
+
 # ---------------------------------------------------------------------------
 # 指令
 # ---------------------------------------------------------------------------
@@ -206,6 +244,24 @@ def cmd_precheck() -> int:
     with connect(url) as conn:
         plan = _current_plan(conn)
         failed = []
+        # 1. 要補紀錄的版本：物件必須真的存在，否則不補（補了之後就永遠不會再套用）
+        for version in plan.repair:
+            path = baseline_check_path(version)
+            if path is None:
+                failed.append(version)
+                print(
+                    f"::error::{version}：沒有 supabase/baseline_checks/{version}_*.sql，不補紀錄"
+                )
+                continue
+            missing = run_object_check(conn, path.read_text(encoding="utf-8"))
+            if missing:
+                failed.append(version)
+                for item in missing:
+                    why = item if item.startswith(("檢查查詢出錯", "（")) else f"{item} 不存在"
+                    print(f"::error::{version}：{why}，不補紀錄")
+            else:
+                print(f"{version}：物件都存在，可以補紀錄")
+        # 2. 待套用的版本：資料要符合新限制
         for version in plan.pending:
             path = precheck_path(version)
             if path is None:
@@ -218,7 +274,10 @@ def cmd_precheck() -> int:
             else:
                 print(f"{version}：事前檢查通過（0 列）")
     if failed:
-        print("請先在 SQL Editor 執行上面的事前檢查 SQL 找出這些資料、修正後再重跑這個 workflow。")
+        print(
+            "已停止，資料庫沒有任何變更。物件不存在：先確認那個 migration 是否真的套用過；"
+            "資料不符合：在 SQL Editor 執行事前檢查 SQL 找出資料、修正後再重跑這個 workflow。"
+        )
         return 1
     return 0
 

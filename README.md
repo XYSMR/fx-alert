@@ -116,7 +116,7 @@ pg_cron 的排程寫在 `supabase/migrations/20261110020000_dispatch_check_rates
 | `ci` | push、PR | validate-config＋防外洩、ruff、pytest、前端測試、Deno（Edge Functions）、資料庫 RLS 測試（真正的 Supabase） |
 | `staging-check` | 手動、staging 的 pg_cron | 用 staging 的 Supabase 跑一次（預設只讀；勾 `send` 才真的寄信） |
 | `keepalive` | 每週日、手動 | 讀一次公開幣別清單 |
-| `deploy-migrations` | `supabase/migrations` 有變更的 push 到 main、手動 | **需要核准**（Environment `production`）→ 事前檢查 → 套用 migration 到正式專案，見〈[資料庫變更](#資料庫變更)〉 |
+| `deploy-migrations` | push 到 main 且 `supabase/migrations/**` 或 `supabase/prechecks/**` 有變更、手動（改前端、文件不會觸發） | **需要核准**（Environment `production`）→ 事前檢查 → 套用 migration 到正式專案，見〈[資料庫變更](#資料庫變更)〉 |
 
 ## 設定一覽
 
@@ -361,10 +361,14 @@ migration 放在 `supabase/migrations/`，檔名 `<14 位數字版本號>_<名�
 
 1. **PR**：CI 在本機 Supabase 套用全部 migration 並跑 RLS 測試。
 2. **staging**：合併前，在 staging 的 SQL Editor 套用並驗證。
-3. **正式專案**：合併到 main 後，`deploy-migrations` 自動啟動，**等你在 Actions 頁面按核准**才執行：
-   1. 比對 repo 和資料庫的紀錄（`supabase_migrations.schema_migrations`），算出要套用哪些版本（只讀）
-   2. **事前檢查**：待套用的版本如果有 `supabase/prechecks/<版本號>_*.sql`，在唯讀交易裡執行；
-      回傳任何一列就停止，什麼都不寫（log 只印列數，不印內容）
+3. **正式專案**：合併到 main 後（`supabase/migrations/**` 或 `supabase/prechecks/**` 有變更才會觸發），
+   `deploy-migrations` 自動啟動，**等你在 Actions 頁面按核准**才執行：
+   1. 比對 repo 和資料庫的紀錄（`supabase_migrations.schema_migrations`），算出要補紀錄、要套用哪些版本（只讀）
+   2. **事前檢查**（只讀；任何一項沒通過就停止，什麼都不寫）
+      - 要補紀錄的版本：`supabase/baseline_checks/<版本號>_*.sql` 確認那個 migration 建立的物件真的存在
+        （例如 pg_cron 的 dispatch 函式、`fx-alert-dispatch` 兩個 cron job）；物件不存在、查詢出錯、或沒有檢查檔都會停止，
+        避免「其實沒套用、卻被標成已套用」
+      - 待套用的版本：`supabase/prechecks/<版本號>_*.sql` 回傳任何一列就停止（log 只印列數，不印內容）
    3. 補上以前手動套用、但沒有紀錄的版本（`supabase/migrations_baseline.txt`；只寫紀錄，不重新執行）
    4. `supabase db push` 依序套用（Supabase CLI，和 CI 同一個版本）
    5. 再比對一次，確認沒有遺漏
@@ -374,8 +378,12 @@ migration 放在 `supabase/migrations/`，檔名 `<14 位數字版本號>_<名�
 可以先不核准，等時機對了再到 Actions → `deploy-migrations` 那一次執行按 **Review deployments → Approve**；
 也可以按 Reject，之後用 **Run workflow** 手動重跑。
 
-**加了新限制的 migration**（check constraint、not null 等），請一起寫事前檢查，列出不符合的資料，
-見 [`supabase/prechecks/README.md`](supabase/prechecks/README.md)。事前檢查失敗時，到 SQL Editor 執行同一段 SQL 找出資料、修正後重跑。
+**加了新限制的 migration**（check constraint、not null 等），請一起寫事前檢查
+`supabase/prechecks/<版本號>_<名稱>.sql`：一段 select，列出「不符合新限制」的資料（應該回傳 0 列）。
+事前檢查失敗時，到 SQL Editor 執行同一段 SQL 找出資料、修正後重跑。
+
+`migrations_baseline.txt` 只記錄自動部署開始前手動套用的 7 個版本，**之後的 migration 不要加進去**；
+每個版本都要有一個 `supabase/baseline_checks/` 物件檢查（每列回傳 `item`、`ok`），測試會確認。
 
 **第一次設定**（只做一次）：
 

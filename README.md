@@ -585,3 +585,10 @@ D = 出發日。下面的日期都會調整成**銀行營業日**（現鈔只能
 記錄或刪除換匯紀錄、修改金額和名稱、刪除旅程。提醒日期在網頁上用 data.json 的 `bank_calendar` 照同樣的規則算，
 `tests/fixtures/trip_schedules.json`（`python scripts/make_trip_fixture.py` 產生）讓 Python 和 JavaScript 逐日比對。
 用語只描述事實，並附上「僅供參考，不保證未來匯率走勢」；`site/tests/trips.test.js` 會檢查不出現投資建議的字眼。
+
+**寄信（`check --mode multi`，`main._check_trips`、`trip_mail.py`）**：每次排程在到價提醒之後，對 `active_trips` 的每趟旅程判斷今天要不要寄。
+- 「相對便宜」只在**今天已經有新牌告**時判斷（早上 8 點牌告還是昨天的；颱風停班沒有牌告的日子也不寄）；分批、最後、出發前這三封固定提醒不看價格
+- 和到價提醒共用：通知時段（不在時段內就等時段開始）、每日寄信上限（兩種一起算）、退訂連結（退訂後兩種都不寄）
+- 寄出後寫 `trip_notifications`；資料庫的 unique 擋掉重複（同一天第二封、固定提醒第二次），寫入衝突只記一行注意
+- 公開的 Actions log 只出現「JPY 旅程#12」和提醒種類，不出現 email 和金額
+- 營業日曆過期（旅程的出發日超過 `seed/tw_bank_calendar.csv` 的範圍）會在 log 提醒更新

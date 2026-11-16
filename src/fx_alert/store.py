@@ -5,7 +5,13 @@
                                    回傳 False 表示規則已不存在（例如使用者剛好刪除帳號）
     record_transition(w, s, ...)   沒寄信但狀態可能改變（例如回升後重新等待）
     flush()                        把累積的變更寫出去；回傳「狀態是否有變」
-    count_sent_since(t)            t 之後寄出了幾封通知（每日寄信上限用）
+    count_sent_since(t)            t 之後寄出了幾封到價通知（每日寄信上限用）
+
+出國換匯計畫（只有多人版；run_check 用 getattr 判斷 store 有沒有這兩個方法）：
+    load_trips()                   還沒出發、還沒換完、Email 開著的旅程（view public.active_trips）
+    count_trip_sent_since(t)       t 之後寄出了幾封換匯提醒（和到價通知一起算每日上限）
+    record_trip_notice(t, d, ...)  寄出換匯提醒後寫一筆 trip_notifications；
+                                   回傳 False 表示已經寫過（同一天、同一種固定提醒）或旅程已刪除
 
 兩種實作：
   * FileStore：單人版。規則來自 config.yaml，狀態在 state.json，通知紀錄在 alerts.csv，
@@ -24,7 +30,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Protocol
 
@@ -43,6 +49,7 @@ from fx_alert.state_store import (
     target_at_transition,
     with_transition,
 )
+from fx_alert.trip_rules import Decision, Sent, Trip
 
 
 class StoreError(RuntimeError):
@@ -61,6 +68,25 @@ class Watch:
     recipients: tuple[str, ...] = field(repr=False)
     user_id: str | None = None  # 多人版才有；用來產生退訂連結
     window: NotifyWindow | None = None  # 通知時段（多人版）；None = 全天
+
+
+@dataclass(frozen=True)
+class TripWatch:
+    """一趟要檢查的旅程（出國換匯計畫）。"""
+
+    key: str  # trips.id
+    label: str  # 給 log 看：幣別＋旅程編號（不能含 email、金額）
+    currency: str
+    departure: date
+    created_on: date
+    remaining: Decimal = field(repr=False)
+    sent: tuple[Sent, ...]
+    recipients: tuple[str, ...] = field(repr=False)
+    user_id: str | None = None
+    window: NotifyWindow | None = None
+
+    def as_trip(self) -> Trip:
+        return Trip(self.departure, self.created_on, self.remaining)
 
 
 class RuleStore(Protocol):
@@ -238,9 +264,16 @@ class SupabaseStore:
             raise StoreError(f"Supabase 回傳的規則格式不對：{type(exc).__name__}") from exc
 
     def count_sent_since(self, since: datetime) -> int:
+        return self._count("notifications", since)
+
+    def count_trip_sent_since(self, since: datetime) -> int:
+        """換匯計畫的提醒（每日上限是 Gmail 的寄信量，和到價通知一起算；有旅程要寄時才查）。"""
+        return self._count("trip_notifications", since)
+
+    def _count(self, table: str, since: datetime) -> int:
         resp = self._request(
             "GET",
-            "notifications",
+            table,
             params={
                 "select": "id",
                 "sent_at": f"gte.{since.isoformat(timespec='seconds')}",
@@ -253,6 +286,54 @@ class SupabaseStore:
         if not total.isdigit():
             raise StoreError("Supabase 沒有回傳通知數量")
         return int(total)
+
+    # ---- 出國換匯計畫 ----
+
+    #: 資料庫有沒有換匯計畫的表（migration 20261116195500 還沒套用時是 False）
+    trips_supported: bool = True
+
+    def load_trips(self) -> list[TripWatch]:
+        try:
+            resp = self._request(
+                "GET", "active_trips", params={"select": _TRIP_COLUMNS, "order": "id"}
+            )
+        except StoreError as exc:
+            if not _table_missing(exc, "active_trips"):
+                raise
+            self.trips_supported = False
+            return []
+        try:
+            return [_row_to_trip(row) for row in resp.json()]
+        except (ValueError, KeyError, TypeError, InvalidOperation) as exc:
+            raise StoreError(f"Supabase 回傳的旅程格式不對：{type(exc).__name__}") from exc
+
+    def record_trip_notice(
+        self, trip: TripWatch, decision: Decision, rate: Decimal | None, now: datetime
+    ) -> bool:
+        try:
+            self._request(
+                "POST",
+                "trip_notifications",
+                headers={"Prefer": "return=minimal"},
+                json={
+                    "trip_id": int(trip.key),
+                    "user_id": trip.user_id,
+                    "kind": decision.kind,
+                    "sent_on": now.date().isoformat(),
+                    "sent_at": now.isoformat(timespec="seconds"),
+                    "rate": None if rate is None else str(rate),
+                    "rank": decision.rank,
+                    "window_days": decision.window,
+                    "days_left": decision.days_left,
+                    "remaining": str(trip.remaining),
+                },
+            )
+        except StoreError as exc:
+            # 409：同一天已經寄過、固定提醒已經寄過（unique），或旅程剛好被刪除（外鍵）
+            if "回應 409" in str(exc):
+                return False
+            raise
+        return True
 
     def record_alert(self, watch: Watch, rate: Decimal, now: datetime) -> bool:
         # 改狀態＋寫通知紀錄在資料庫的同一個交易裡完成（public.record_alert）。
@@ -348,6 +429,21 @@ class ReadOnlyStore:
     def flush(self) -> bool:
         return False
 
+    @property
+    def trips_supported(self) -> bool:
+        return getattr(self._inner, "trips_supported", True)
+
+    def load_trips(self) -> list[TripWatch]:
+        load = getattr(self._inner, "load_trips", None)
+        return load() if load else []
+
+    def count_trip_sent_since(self, since: datetime) -> int:
+        return self._inner.count_trip_sent_since(since)
+
+    def record_trip_notice(self, trip, decision, rate, now) -> bool:
+        self._log(f"[dry-run] {trip.label}: 不寫入換匯提醒 {decision.kind}")
+        return True
+
     def record_check(self, at: datetime, ok: bool, errors: int) -> None:
         self._log(f"[dry-run] 不寫入檢查狀態（ok={ok}、錯誤 {errors} 個）")
 
@@ -366,6 +462,46 @@ def _row_to_watch(row: dict) -> Watch:
         user_id=row["user_id"],
         window=parse_window(row.get("notify_start"), row.get("notify_end")),
     )
+
+
+_TRIP_COLUMNS = ",".join(
+    [
+        "id",
+        "user_id",
+        "currency",
+        "departure",
+        "remaining::text",
+        "created_on",
+        "email",
+        "notify_start::text",
+        "notify_end::text",
+        "sent",
+    ]
+)
+
+
+def _row_to_trip(row: dict) -> TripWatch:
+    sent = tuple(
+        Sent(item["kind"], date.fromisoformat(item["on"])) for item in (row.get("sent") or [])
+    )
+    return TripWatch(
+        key=str(row["id"]),
+        label=f"{row['currency']} 旅程#{row['id']}",
+        currency=row["currency"],
+        departure=date.fromisoformat(row["departure"]),
+        created_on=date.fromisoformat(row["created_on"]),
+        remaining=_dec(row["remaining"]),
+        sent=sent,
+        recipients=(row["email"],),
+        user_id=row["user_id"],
+        window=parse_window(row.get("notify_start"), row.get("notify_end")),
+    )
+
+
+def _table_missing(exc: StoreError, table: str) -> bool:
+    """migration 還沒套用：PostgREST 回 404（PGRST205）或訊息裡提到表名。"""
+    text = str(exc)
+    return "回應 404" in text or (table in text and "schema cache" in text)
 
 
 def _dec(text: str) -> Decimal:

@@ -22,6 +22,9 @@ check 每次執行：
 每天寄信上限（config.yaml 的 email.daily_limit）：超過的通知這次不寄、狀態不更新，
 下次排程再試；這不算錯誤，但會在 log 和 Actions 顯示警告。
 
+出國換匯計畫（多人版，store 有 load_trips 時）：到價提醒之後，對每趟旅程用 trip_rules.decide 判斷
+今天要不要寄、寄哪一種（見 _check_trips）。和到價提醒共用通知時段、每日寄信上限、退訂連結。
+
 結束碼：0 = 一切正常（含略過、延後）；1 = 有任何錯誤（抓取、解析、寄信、設定）。
 """
 
@@ -59,6 +62,10 @@ from fx_alert.store import (
     SupabaseConfig,
     SupabaseStore,
 )
+from fx_alert.trip_mail import build_trip_message
+from fx_alert.trip_rules import decide as decide_trip
+from fx_alert.trip_rules import schedule as trip_schedule
+from fx_alert.unsubscribe import DEFAULT_SITE_URL as UNSUB_SITE
 from fx_alert.unsubscribe import UnsubscribeConfig, UnsubscribeError
 
 
@@ -69,6 +76,7 @@ class CheckResult:
     notified: list[str] = field(default_factory=list)
     deferred: list[str] = field(default_factory=list)  # 超過每日上限，延到下次
     outside_window: list[str] = field(default_factory=list)  # 已到價但不在通知時段，時段開始再判斷
+    trip_notified: list[str] = field(default_factory=list)  # 換匯計畫：寄出的提醒（label: kind）
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -232,6 +240,9 @@ def _check_rates(
             # 一條規則寫入失敗，不影響其他規則
             result.errors.append(f"{w.label} 狀態寫入失敗：{exc}")
 
+    ctx = (cfg, store, notifier, email_cfg, local_now, board, rates, result, log, unsubscribe)
+    remaining = _check_trips(*ctx, remaining)
+
     if result.deferred:
         log(f"今天已達寄信上限 {cfg.daily_limit} 封，延後 {len(result.deferred)} 封到下次排程")
 
@@ -241,6 +252,110 @@ def _check_rates(
         result.errors.append(f"狀態寫入失敗：{exc}")
         return
     log(f"狀態{'已更新' if result.state_changed else '沒有變化'}")
+
+
+def _check_trips(
+    cfg, store, notifier, email_cfg, local_now, board, rates, result, log, unsubscribe, remaining
+) -> int:
+    """出國換匯計畫：每趟旅程今天要不要寄提醒。回傳剩下還能寄幾封。
+
+    * 價格類提醒（相對便宜）只在「今天已經有新牌告」時判斷：早上 8 點時牌告還是昨天的，
+      不能拿昨天的價格說「現在」；颱風停班沒有牌告的日子也不會寄價格提醒。
+    * 固定日期的提醒（分批、最後、出發前）不看價格，營業日的通知時段內第一次檢查就寄。
+    * 不在通知時段：這次不判斷，時段開始後的第一次檢查再判斷（固定提醒當天會補寄）。
+    * log 只寫「幣別 旅程#編號」和提醒種類，不寫 email 和金額（Actions 的 log 是公開的）。
+    """
+    load = getattr(store, "load_trips", None)
+    if load is None:
+        return remaining
+    try:
+        trips = load()
+    except StoreError as exc:
+        result.errors.append(f"讀不到換匯計畫的旅程：{exc}")
+        return remaining
+    if getattr(store, "trips_supported", True) is False:
+        log("注意：資料庫還沒有換匯計畫的表（migration 還沒套用），略過換匯提醒")
+        return remaining
+    if not trips:
+        return remaining
+
+    from fx_alert.bizdays import load_calendar
+    from fx_alert.daily import daily_closes, recent_stats
+
+    today = local_now.date()
+    try:
+        cal = load_calendar()
+        closes = daily_closes(cfg.data_dir, until=local_now)
+    except (OSError, ValueError) as exc:
+        result.errors.append(f"換匯計畫：讀不到營業日曆或收盤價，這次不寄：{type(exc).__name__}")
+        return remaining
+    if any(t.departure > cal.covered_until for t in trips):
+        log(f"注意：營業日曆只到 {cal.covered_until}，請補上之後的國定假日（seed/README.md）")
+    fresh = board.quoted_at is not None and board.quoted_at.astimezone(TAIPEI).date() == today
+
+    counted = False
+    for t in trips:
+        rate = rates.get(t.currency)
+        if rate is None:
+            try:  # 沒有人設定到價提醒的幣別（單機測試時沒有 track 全部幣別）
+                rate = get_cash_sell(board, t.currency)
+            except ParseError:
+                rate = None  # 沒有報價：只會寄固定日期的提醒
+        recent = None
+        if fresh and rate is not None and closes.get(t.currency):
+            recent = recent_stats(closes[t.currency], rate, today)
+        decision = decide_trip(t.as_trip(), today, recent, list(t.sent), cal)
+        if decision is None:
+            continue
+        if t.window and not t.window.contains(local_now):
+            log(f"{t.label}: 要寄 {decision.kind}，但不在通知時段，時段開始後再判斷")
+            continue
+        if not counted:
+            # 今天已經寄出的換匯提醒也算進每日上限（只在真的有提醒要寄時才查一次）
+            day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+            try:
+                remaining -= store.count_trip_sent_since(day_start)
+            except StoreError as exc:
+                result.errors.append(f"查不到今天已寄出的換匯提醒數量，這次不寄：{exc}")
+                return remaining
+            counted = True
+        if remaining <= 0:
+            result.deferred.append(t.label)
+            continue
+        links = None
+        if unsubscribe and t.user_id:
+            try:
+                links = unsubscribe.links(t.user_id)
+            except UnsubscribeError as exc:
+                result.errors.append(f"{t.label} 無法產生退訂連結，這次不寄：{exc}")
+                continue
+        msg = build_trip_message(
+            email_cfg,
+            currency=t.currency,
+            decision=decision,
+            sch=trip_schedule(t.departure, cal),
+            today=today,
+            rate=rate,
+            quoted_at=board.quoted_at,
+            remaining=t.remaining,
+            to=t.recipients,
+            unsubscribe=links,
+            site_url=unsubscribe.site_url if unsubscribe else UNSUB_SITE,
+        )
+        try:
+            notifier.send(msg)
+        except NotifyError as exc:
+            result.errors.append(f"{t.label} 換匯提醒寄送失敗：{redact_emails(str(exc))}")
+            continue
+        remaining -= 1
+        result.trip_notified.append(f"{t.label}: {decision.kind}")
+        log(f"{t.label}: 寄出換匯提醒 {decision.kind}（距離出發 {decision.days_left} 天）")
+        try:
+            if not store.record_trip_notice(t, decision, rate, local_now):
+                log(f"{t.label}: 提醒紀錄已存在或旅程剛被刪除，略過記錄")
+        except StoreError as exc:
+            result.errors.append(f"{t.label} 換匯提醒紀錄寫入失敗：{exc}")
+    return remaining
 
 
 def _write_github_output(result: CheckResult) -> None:

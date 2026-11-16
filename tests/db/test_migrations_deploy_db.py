@@ -45,7 +45,7 @@ def test_baseline_object_checks_pass_on_current_schema(conn):
 @pytest.mark.parametrize(
     ("break_it", "expected"),
     [
-        ("select cron.unschedule('fx-alert-dispatch-1605')", "fx-alert-dispatch-1605"),
+        ("select cron.unschedule('fx-alert-dispatch')", "cron job fx-alert-dispatch"),
         ("drop function private.dispatch_check_rates()", "private.dispatch_check_rates()"),
     ],
 )
@@ -127,3 +127,30 @@ def test_checks_stay_read_only_on_a_writable_connection(wconn):
         md.run_precheck(wconn, "update public.currencies set name_zh = name_zh")
     wconn.rollback()
     assert md.run_object_check(wconn, "select 'x' as item, true as ok") == []
+
+
+def test_baseline_check_before_24h_migration():
+    """24 小時的 migration 還沒套用（舊的兩個工作都在）也通過；16:05 不見又沒併入 → 回報。"""
+    c = psycopg.connect(DB_URL)
+    try:
+        sql = md.baseline_check_path("20261110020000").read_text(encoding="utf-8")
+        with c.cursor() as cur:
+            # 回到 24 小時之前的排程
+            cur.execute(
+                "select cron.schedule('fx-alert-dispatch', '5,35 1-7 * * 1-5', "
+                "'select private.dispatch_check_rates()')"
+            )
+            cur.execute(
+                "select cron.schedule('fx-alert-dispatch-1605', '5 8 * * 1-5', "
+                "'select private.dispatch_check_rates()')"
+            )
+            cur.execute(sql)
+            assert md.failed_items(cur.fetchall()) == []
+            cur.execute("select cron.unschedule('fx-alert-dispatch-1605')")
+            cur.execute(sql)
+            assert md.failed_items(cur.fetchall()) == [
+                "cron job fx-alert-dispatch-1605（或已併入 24 小時排程）"
+            ]
+    finally:
+        c.rollback()
+        c.close()

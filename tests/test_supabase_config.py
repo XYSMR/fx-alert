@@ -97,6 +97,13 @@ def test_pg_cron_dispatch_never_forces():
     assert _dispatch_inputs()["staging-check.yml"]["send"] == "false"
 
 
+def test_pg_cron_schedule_24h():
+    sql = (SUPABASE / "migrations/20261116153000_dispatch_24h.sql").read_text("utf-8")
+    assert "cron.schedule('fx-alert-dispatch', '5,35 * * * *'" in sql
+    assert "cron.unschedule('fx-alert-dispatch-1605')" in sql
+    assert "from cron.job" not in sql  # Supabase 上讀不到 cron.job
+
+
 def test_pg_cron_schedule_is_utc_with_taiwan_time_comments():
     sql = (SUPABASE / "migrations/20261110020000_dispatch_check_rates.sql").read_text("utf-8")
     assert "cron.schedule('fx-alert-dispatch', '5,35 1-7 * * 1-5'" in sql

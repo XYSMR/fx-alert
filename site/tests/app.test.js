@@ -582,3 +582,17 @@ test("剛部署完：狀態列顯示 check_status 的檢查時間，不是 data.
   // 讀不到 Supabase：照舊退回 data.json 的產生時間
   assert.equal(app.statusRecord(null, data).at, data.generated_at);
 });
+
+test("24 小時檢查：狀態列不會出現「非檢查時段」，半夜也會發現資料過期", () => {
+  const h24 = { weekdays_only: false, start: "00:00", end: "23:59", first_check: "00:05", interval_minutes: 30 };
+  const lc = (at) => ({ at, ok: true, errors: 0 });
+  // 週六凌晨 03:10、上一次 03:05：正常
+  const ok = app.statusLine({ last_check: lc("2026-11-21T03:05:20+08:00"), business_hours: h24 }, CS_AT("2026-11-21T03:10:00+08:00"));
+  assert.equal(ok.tone, "ok");
+  // 00:30、上一次是昨天 21:35（漏了好幾次）：要提醒可能過期（不能因為「剛過 00:00」就放過）
+  const stale = app.statusLine({ last_check: lc("2026-11-20T21:35:20+08:00"), business_hours: h24 }, CS_AT("2026-11-21T00:30:00+08:00"));
+  assert.equal(stale.tone, "warn");
+  // 23:50（最後一次 23:35 之後）：照樣算檢查時段內、資料正常
+  assert.equal(app.statusLine({ last_check: lc("2026-11-21T23:35:20+08:00"), business_hours: h24 }, CS_AT("2026-11-21T23:50:00+08:00")).tone, "ok");
+  assert.match(app.scheduleText(h24), /^每天 00:05–23:35 每 30 分鐘檢查一次牌告。/);
+});

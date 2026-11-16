@@ -7,10 +7,10 @@ name: check-rates
 
 on:
   schedule:
-    # cron 用 UTC。台灣 = UTC+8，所以下面是台灣平日 09:07 ~ 16:07，每 30 分鐘一次。
-    # 避開整點（GitHub 整點最塞），程式裡另有 09:00–16:30 的時段檢查。
-    - cron: "7,37 1-7 * * 1-5"
-    - cron: "7 8 * * 1-5"
+    # 備援：每天 24 小時，每 30 分鐘（:07、:37；cron 是 UTC，但分鐘數和台灣一樣）。
+    # 主要觸發是 Supabase pg_cron（:05、:35）；gate 會略過 20 分鐘內已經檢查過的那一次。
+    # 避開整點（GitHub 整點最塞）。
+    - cron: "7,37 * * * *"
   workflow_dispatch:
     inputs:
       force:

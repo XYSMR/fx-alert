@@ -283,13 +283,10 @@ def test_first_check_matches_pg_cron_schedule():
     from fx_alert.build_site import SCHEDULE_INTERVAL_MINUTES, SCHEDULE_OFFSET_MINUTES
 
     root = Path(__file__).resolve().parents[1]
-    sql = (root / "supabase/migrations/20261110020000_dispatch_check_rates.sql").read_text(
-        encoding="utf-8"
-    )
+    sql = (root / "supabase/migrations/20261116153000_dispatch_24h.sql").read_text(encoding="utf-8")
     assert SCHEDULE_OFFSET_MINUTES == 5
     assert SCHEDULE_INTERVAL_MINUTES == 30
-    assert f"'{SCHEDULE_OFFSET_MINUTES},{SCHEDULE_OFFSET_MINUTES + 30} 1-7 * * 1-5'" in sql
-    assert f"'{SCHEDULE_OFFSET_MINUTES} 8 * * 1-5'" in sql  # 16:05
+    assert f"'{SCHEDULE_OFFSET_MINUTES},{SCHEDULE_OFFSET_MINUTES + 30} * * * *'" in sql
 
 
 # ---------- 公開版（多人版：AUTH_ENABLED=true 時部署用） ----------

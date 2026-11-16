@@ -20,7 +20,7 @@
    - 例如日圓目標 `0.2050`：兆豐的日圓現金賣出價 ≤ 0.2050 時寄信給你。
    - 牌告只到小數第 4 位，目標價也是。越南盾、印尼盾每跳一格（0.0001）就差好幾 %，畫面上會提醒。
    - 目標價和現價差超過 30% 時，儲存前會再問一次，避免打錯小數點。
-3. 平日台灣時間 09:05–16:05，每 30 分鐘檢查一次。到價時寄到你登入用的 Gmail。
+3. 每天 24 小時（含週末），每 30 分鐘檢查一次（台灣時間 :05、:35）。到價時寄到你登入用的 Gmail（只在你的通知時段內寄，見第 4 點）。
    - 到價判斷看的是檢查當下的價格：匯率如果在兩次檢查之間短暫跌到目標又回升，不會通知。
 4. **通知時段（台灣時間）**：在「設定提醒」選開始和結束時間，按 **儲存時段**。預設 08:00–22:00。
    - 只在這段時間內寄信（含開始、不含結束）。開始比結束晚 = 跨午夜（例如 22:00–隔天 07:00）；兩個一樣 = 全天。
@@ -112,14 +112,15 @@ flowchart LR
 
 | 什麼 | 時間（台灣） | 說明 |
 |---|---|---|
-| **Supabase pg_cron**（主要） | 平日 09:05–15:35 每 :05、:35，以及 16:05 | `private.dispatch_check_rates()` 經 pg_net 呼叫 GitHub API，觸發 `check-rates`（`source=pg_cron`、`force=false`） |
-| GitHub `schedule`（備援） | 平日 09:07–15:37 每 :07、:37，以及 16:07 | GitHub 的排程常延遲或被丟掉，所以只當備援 |
+| **Supabase pg_cron**（主要） | 每天 24 小時，每 :05、:35 | `private.dispatch_check_rates()` 經 pg_net 呼叫 GitHub API，觸發 `check-rates`（`source=pg_cron`、`force=false`） |
+| GitHub `schedule`（備援） | 每天 24 小時，每 :07、:37 | GitHub 的排程常延遲或被丟掉，所以只當備援 |
 | `check-rates` 的 **gate** | 每次開始時 | 自動觸發且 20 分鐘內已成功檢查過 → 略過（不檢查、不 ping、不部署，仍是綠燈）；手動執行一律檢查。上次檢查的時間讀 Supabase 的 `check_status`，讀不到才用 `state` 分支的 `last_check.json` |
-| 檢查時段 | 09:00–16:30 | 時段外程式會略過（`config.yaml` 的 `business_hours`） |
+| 檢查時段 | 每天 00:00–23:59 | `config.yaml` 的 `business_hours`；半夜要不要寄信由每個人的通知時段決定 |
 | **healthchecks.io** | — | 每次真的檢查成功就 ping；約 1 小時沒收到 → 寄信給維運者 |
 | `keepalive` | 每週日 12:23 | 用 publishable key 讀一次公開幣別清單，避免 Supabase 免費專案因閒置暫停 |
 
-pg_cron 的排程寫在 `supabase/migrations/20261110020000_dispatch_check_rates.sql`（UTC：`5,35 1-7 * * 1-5`、`5 8 * * 1-5`）。
+pg_cron 的排程寫在 `supabase/migrations/20261116153000_dispatch_24h.sql`（`5,35 * * * *`；UTC 和台灣的分鐘數一樣）。
+2026-11-16 以前是平日 09:05–16:05（`20261110020000_dispatch_check_rates.sql`）。
 
 ### Workflows（`.github/workflows/`）
 
@@ -202,7 +203,7 @@ Vault 一律在後台頁面新增，**不要**用 SQL Editor 執行 `vault.creat
 |---|---|
 | `currencies` 的幣別清單 | 網站公開顯示哪些幣別的行情（走勢則是全部 18 種都會記錄，見下方〈支援的幣別〉） |
 | `currencies` 的 `target`、`buffer` | **不會用到**。只在退回單人版、執行 `migrate-me` 時使用；**使用者的目標價在網站上設定**（`export-state` 也會拿來比對，網站上改過的目標價只會提醒、不會寫回） |
-| `business_hours` | 檢查時段（台灣時間 09:00–16:30、只有平日） |
+| `business_hours` | 檢查時段（台灣時間）：目前 00:00–23:59、每天（`weekdays_only: false`） |
 | `email.daily_limit` | 每天最多寄幾封到價通知（Gmail 個人帳號約 500 位收件人／天，預設 400） |
 | `data_dir` | `state` 分支在 Actions 上的資料夾 |
 
@@ -250,6 +251,28 @@ commit 到 `state` 分支、部署 `data.json` 前都會自動掃描，確認沒
 
 ## 定期維護
 
+### 待辦：評估週末要不要檢查（**2026-11-30 之後**）
+
+24 小時檢查從 2026-11-16 開始，包含週末。跑滿兩個週末後，用 `state` 分支的 `history/` 統計
+**週末（週六 06:00 到週一 08:00，台灣時間）** 牌告變動了幾次。兩個週末都是 0 次，再評估要不要改成只跑平日
+（改 `config.yaml` 的 `weekdays_only`、pg_cron 和 GitHub 的排程、healthchecks.io 的 Schedule）。
+
+```bash
+git fetch origin state && git worktree add /tmp/fx-state origin/state
+python - <<'PY'
+import csv, glob
+from datetime import datetime
+for name in sorted(glob.glob("/tmp/fx-state/history/*.csv")):
+    times = sorted({r["quoted_at"] for r in csv.DictReader(open(name, encoding="utf-8"))})
+    weekend = [t for t in times
+               if (d := datetime.fromisoformat(t)).weekday() == 5 and d.hour >= 6
+               or d.weekday() == 6 or d.weekday() == 0 and d.hour < 8]
+    if weekend:
+        print(name.rsplit("/", 1)[1], "週末牌告", len(weekend), "份")
+PY
+```
+每一份牌告（`quoted_at`）就是一次變動；沒有印出任何一行 = 週末完全沒有變動。
+
 ### 每年兩次左右：更換 pg_cron 用的 GitHub token（下次 **2027-02-08** 到期）
 
 **在 2027-02-01 前後（到期前一週）**換掉，正式、staging 各一把，步驟相同。token 過期時 pg_net 會回 401，
@@ -262,7 +285,7 @@ commit 到 `state` 分支、部署 `data.json` 前都會自動掃描，確認沒
    - Permissions：只開 **Actions: Read and write**
 2. 該專案的 Supabase 後台 → **Integrations → Vault**，編輯 `github_dispatch_token`，貼上新 token 後儲存。
    不要用 SQL Editor（查詢紀錄會留下 token）。
-3. 等下一個 :05 或 :35（平日台灣時間 09:05–16:05），在該專案的 SQL Editor 確認回 **204**：
+3. 等下一個 :05 或 :35，在該專案的 SQL Editor 確認回 **204**：
    ```sql
    select to_char(created at time zone 'Asia/Taipei', 'MM-DD HH24:MI:SS') as 時間,
           status_code, left(coalesce(error_msg, content::text, ''), 200) as 內容
@@ -312,11 +335,11 @@ GitHub Actions 的 `schedule` 是「盡力而為」：官方文件寫明負載�
 略過時（時段外、gate 去重、`dry_run`）都不 ping，監控才能發現該跑的時段沒有檢查。
 
 1. 到 <https://healthchecks.io> 註冊（免費方案可監控 20 個工作），新增一個 check：
-   - **Schedule**：選 **Cron**，填兩行
+   - **Schedule**：選 **Cron**，填
      ```
-     7,37 9-15 * * 1-5
-     7 16 * * 1-5
+     7,37 * * * *
      ```
+     （2026-11-16 改成 24 小時；以前是 `7,37 9-15 * * 1-5` 和 `7 16 * * 1-5` 兩行）
    - **Time Zone**：`Asia/Taipei`
    - **Grace Time**：`30 minutes`（下一次也沒來，就是約 1 小時沒有 ping → 寄信）
    - **Integrations**：Email

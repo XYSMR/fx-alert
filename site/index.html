@@ -102,6 +102,13 @@
       <p class="form-status" id="my-rules-status" role="status" aria-live="polite"></p>
     </section>
 
+    <!-- 登入後才出現：出國換匯計畫（trips.js） -->
+    <section class="panel" id="my-trips" aria-labelledby="my-trips-title" hidden>
+      <h2 id="my-trips-title">出國換匯計畫</h2>
+      <div id="my-trips-body"></div>
+      <p class="form-status" id="my-trips-status" role="status" aria-live="polite"></p>
+    </section>
+
     <section class="panel" id="my-alerts" aria-labelledby="my-alerts-title" hidden>
       <h2 id="my-alerts-title">我的通知紀錄</h2>
       <table class="alerts" id="my-alerts-table" hidden>
@@ -141,6 +148,7 @@
   <!-- config.js 由部署產生（python -m fx_alert site-config）。登入功能關閉時裡面只有
        {"authEnabled": false}；supabase-js 不在這裡載入，只有開啟時才由 account.js 動態載入 -->
   <script src="config.js"></script>
+  <script src="trips.js"></script>
   <script src="account.js"></script>
   <script src="app.js"></script>
 </body>

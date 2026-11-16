@@ -62,6 +62,16 @@ class Calendar:
         return out
 
 
+def calendar_json(cal: Calendar) -> dict:
+    """給網頁（data.json）用：前端照同樣的規則算旅程的提醒日期（site/trips.js）。"""
+    return {
+        "from": cal.covered_from.isoformat(),
+        "until": cal.covered_until.isoformat(),
+        "off": sorted(d.isoformat() for d in cal.off),
+        "workday": sorted(d.isoformat() for d in cal.workday),
+    }
+
+
 def load_calendar(path: Path = CALENDAR_PATH) -> Calendar:
     off, work = set(), set()
     with open(path, encoding="utf-8", newline="") as f:

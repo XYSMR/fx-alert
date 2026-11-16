@@ -1020,7 +1020,7 @@ async function main() {
       cardHint = loggedIn ? null : "登入後可以設定目標價，到價時寄 Email 給你";
       converterHint = loggedIn ? null : "登入後可以比較目標價";
       renderCurrencies(personal);
-    });
+    }, data.bank_calendar ?? null);
   }
 }
 

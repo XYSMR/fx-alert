@@ -26,6 +26,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
+from fx_alert.bizdays import calendar_json, load_calendar
 from fx_alert.config import TAIPEI, AppConfig
 from fx_alert.currencies import CATALOG, SPOT_ONLY, TICK, format_price
 from fx_alert.daily import SEED_PATH, daily_closes, recent_stats
@@ -216,6 +217,8 @@ def build_data(
         "currencies": currencies,
         # 兆豐只有即期匯率、不支援的幣別（網頁下拉選單下方註明）
         "unsupported": [{"code": k, "name": v} for k, v in SPOT_ONLY.items()],
+        # 銀行營業日的例外日期：前端算出國換匯計畫的提醒日期（和 trip_rules.schedule 一樣）
+        "bank_calendar": calendar_json(load_calendar()),
         "alerts": alerts,
     }
     if public:

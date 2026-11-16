@@ -556,10 +556,29 @@ test("Supabase 讀得到：用比較新的那一份（check_status 每次檢查�
   assert.equal(app.statusRecord(remote, CS_DATA), remote);
   const s = app.statusLine({ ...CS_DATA, last_check: app.statusRecord(remote, CS_DATA) }, CS_AT("2026-11-16T11:40:00+08:00"));
   assert.match(s.text, /11\/16 11:35 更新/);
-  // Supabase 的紀錄比 data.json 舊（例如寫入一直失敗）：用 data.json 的
+  // Supabase 的紀錄比 data.json 的 last_check 舊（例如寫入一直失敗）：用 data.json 的檢查時間
   const old = { at: "2026-11-13T14:10:00+08:00", ok: true, errors: 0 };
-  assert.equal(app.statusRecord(old, CS_DATA).at, CS_DATA.generated_at);
+  assert.equal(app.statusRecord(old, CS_DATA).at, CS_DATA.last_check.at);
   // 最近一次檢查失敗：照實顯示
   const failed = { at: "2026-11-16T11:35:10+08:00", ok: false, errors: 1 };
   assert.equal(app.statusLine({ ...CS_DATA, last_check: app.statusRecord(failed, CS_DATA) }, CS_AT("2026-11-16T11:40:00+08:00")).tone, "bad");
+});
+
+test("剛部署完：狀態列顯示 check_status 的檢查時間，不是 data.json 的產生時間", () => {
+  // 正式環境 2026-11-16 實際的值：13:49:05 檢查、13:49:26 部署
+  const data = {
+    generated_at: "2026-11-16T13:59:26+08:00", // 假設部署拖到下一個 10 分鐘
+    last_check: { at: "2026-11-16T13:49:05+08:00", ok: true, errors: 0 },
+    business_hours: CS_HOURS,
+  };
+  const remote = { at: "2026-11-16T05:49:05+00:00", ok: true, errors: 0 };
+  assert.equal(app.statusRecord(remote, data), remote);
+  const s = app.statusLine({ ...data, last_check: app.statusRecord(remote, data) }, CS_AT("2026-11-16T14:00:00+08:00"));
+  assert.match(s.text, /11\/16 13:49 更新/);
+  // 下一次檢查牌告沒變（沒有部署）：check_status 比 data.json 新 → 顯示新的檢查時間
+  const next = { at: "2026-11-16T06:05:04+00:00", ok: true, errors: 0 };
+  assert.match(app.statusLine({ ...data, last_check: app.statusRecord(next, data) }, CS_AT("2026-11-16T14:06:00+08:00")).text,
+    /11\/16 14:05 更新/);
+  // 讀不到 Supabase：照舊退回 data.json 的產生時間
+  assert.equal(app.statusRecord(null, data).at, data.generated_at);
 });

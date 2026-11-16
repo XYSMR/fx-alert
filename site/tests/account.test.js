@@ -240,3 +240,57 @@ test("越南盾提醒的卡片：目標、回升門檻都是 4 位小數", () =>
   assert.equal(card.rearm_above, "0.0015");
   assert.ok(!JSON.stringify(card).includes("0.00150"));
 });
+
+// ---------- 通知時段（台灣時間） ----------
+
+const TPE = (s) => new Date(`${s}+08:00`);
+
+test("windowOptions：00:00 到 23:30，每 30 分鐘", () => {
+  const opts = a.windowOptions();
+  assert.equal(opts.length, 48);
+  assert.equal(opts[0], "00:00");
+  assert.equal(opts[16], "08:00");
+  assert.equal(opts[47], "23:30");
+});
+
+test("notifyWindow／windowLabel：預設 08:00–22:00，跨午夜、全天", () => {
+  assert.deepEqual(a.notifyWindow(null), { start: "08:00", end: "22:00" });
+  assert.deepEqual(a.notifyWindow({ email_enabled: true }), { start: "08:00", end: "22:00" }); // 還沒套用 migration
+  assert.deepEqual(a.notifyWindow({ notify_start: "22:00:00", notify_end: "07:30:00" }), { start: "22:00", end: "07:30" });
+  assert.equal(a.windowLabel({ start: "08:00", end: "22:00" }), "08:00–22:00");
+  assert.equal(a.windowLabel({ start: "22:00", end: "07:00" }), "22:00–隔天 07:00");
+  assert.equal(a.windowLabel({ start: "00:00", end: "00:00" }), "全天");
+});
+
+test("inWindow：一律用台灣時間判斷（含開始、不含結束），和 Python 一樣", () => {
+  const day = { start: "08:00", end: "22:00" };
+  const night = { start: "22:00", end: "07:00" };
+  assert.equal(a.inWindow(day, TPE("2026-11-16T08:00:00")), true);
+  assert.equal(a.inWindow(day, TPE("2026-11-16T07:35:00")), false);
+  assert.equal(a.inWindow(day, TPE("2026-11-16T22:00:00")), false);
+  assert.equal(a.inWindow(night, TPE("2026-11-16T02:35:00")), true);
+  assert.equal(a.inWindow(night, TPE("2026-11-16T12:05:00")), false);
+  assert.equal(a.inWindow({ start: "00:00", end: "00:00" }, TPE("2026-11-16T03:05:00")), true);
+  // 瀏覽器時區不影響：UTC 23:30 = 台灣 07:30
+  assert.equal(a.inWindow(day, new Date("2026-11-15T23:30:00Z")), false);
+});
+
+test("時段外到價：卡片說明「不在通知時段，時段開始後再判斷」，並標示台灣時間", () => {
+  const jpy = { code: "JPY", name: "日圓", rate: "0.2040" };
+  const rule = { currency: "JPY", target: "0.2050", buffer: null, state: "armed", enabled: true };
+  const profile = { email_enabled: true, notify_start: "08:00:00", notify_end: "22:00:00" };
+  const [night] = a.personalCurrencies([jpy], [rule], profile, TPE("2026-11-16T02:35:00"));
+  assert.equal(night.notify_note,
+    "已達到目標，但現在不在你的通知時段（台灣時間 08:00–22:00）。08:00 之後的第一次檢查會再判斷一次，那時還在目標以下才寄 Email");
+  assert.equal(app.cardView(night).message, night.notify_note);
+  assert.equal(app.cardView(night).badge, "已到價");
+  // 時段內：照舊「下次檢查時會寄」
+  const [noon] = a.personalCurrencies([jpy], [rule], profile, TPE("2026-11-16T12:05:00"));
+  assert.equal(noon.notify_note, null);
+  assert.equal(app.cardView(noon).message, "已達到目標，下次檢查時會寄 Email 給你");
+  // 還沒到價、或已經通知過：不顯示時段說明
+  const [far] = a.personalCurrencies([{ ...jpy, rate: "0.2100" }], [rule], profile, TPE("2026-11-16T02:35:00"));
+  assert.equal(far.notify_note, null);
+  const [sent] = a.personalCurrencies([jpy], [{ ...rule, state: "triggered" }], profile, TPE("2026-11-16T02:35:00"));
+  assert.equal(sent.notify_note, null);
+});

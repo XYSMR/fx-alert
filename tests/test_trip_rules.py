@@ -130,3 +130,52 @@ def test_js_fixture_matches_python():
     spec.loader.exec_module(fx)
     saved = json.loads((root / "tests" / "fixtures" / "trip_schedules.json").read_text("utf-8"))
     assert saved == fx.build(), "請執行 python scripts/make_trip_fixture.py"
+
+
+# ---------- 建立日的邊界：提醒日當天建立會寄、隔天建立不寄 ----------
+
+D24 = date(2026, 11, 24)  # 週二出發：分批 11/03、最後 11/17、出發前 11/20、備用 11/23
+
+
+def _trip(created):
+    return Trip(D24, created, Decimal("1000"))
+
+
+def test_boundary_schedule_for_test_trip():
+    s = schedule(D24, CAL)
+    assert (s.near_on, s.final_on, s.last_call, s.spare) == (
+        date(2026, 11, 3), date(2026, 11, 17), date(2026, 11, 20), date(2026, 11, 23))  # fmt: skip
+
+
+def test_final_created_on_reminder_day_is_sent():
+    assert decide(_trip(date(2026, 11, 17)), date(2026, 11, 17), rec(19), [], CAL).kind == FINAL
+
+
+def test_final_created_day_after_is_not_sent():
+    late = _trip(date(2026, 11, 18))
+    assert decide(late, date(2026, 11, 18), rec(0), [], CAL) is None  # 最後階段沒有價格提醒
+    assert decide(late, date(2026, 11, 19), rec(0), [], CAL) is None
+
+
+def test_near_start_created_on_reminder_day_is_sent_day_after_is_not():
+    s = schedule(D, CAL)  # 1/17 出發：分批 12/24
+    on_day = Trip(D, s.near_on, Decimal("1"))
+    assert decide(on_day, s.near_on, rec(19), [], CAL).kind == NEAR_START
+    after = Trip(D, date(2026, 12, 28), Decimal("1"))
+    assert decide(after, date(2026, 12, 28), rec(19), [], CAL) is None
+
+
+def test_last_call_needs_trip_created_before_that_day():
+    before = _trip(date(2026, 11, 19))
+    sent = [Sent(FINAL, date(2026, 11, 17))]
+    assert decide(before, date(2026, 11, 20), rec(19), sent, CAL).kind == LAST_CALL
+    on_day = _trip(date(2026, 11, 20))
+    assert decide(on_day, date(2026, 11, 20), rec(19), [], CAL) is None
+
+
+def test_price_reminder_on_creation_day_in_near_phase():
+    """建立時已在接近階段：價格在前 40% 低，當天就可能寄。"""
+    created = date(2027, 1, 4)  # 1/17 出發的接近階段（12/24～1/7）
+    t = Trip(D, created, Decimal("1"))
+    assert decide(t, created, rec(8), [], CAL).kind == CHEAP_NEAR  # 8/20 = 40%
+    assert decide(t, created, rec(9), [], CAL) is None

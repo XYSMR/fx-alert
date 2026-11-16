@@ -340,12 +340,19 @@ function fallbackLastCheck(data) {
   return { at: data.generated_at, ok: !(lc && lc.ok === false), errors: (lc && lc.errors) || 0 };
 }
 
-/** 狀態列用哪一份紀錄：兩份都有就用比較新的（Supabase 每次檢查都更新，data.json 只在資料有變時） */
+/**
+ * 狀態列用哪一份紀錄：
+ * - 讀得到 check_status → 用它的檢查時間（每次檢查都更新）
+ *   例外：data.json 的 last_check（同樣是「檢查時間」）比它新 → 用 data.json 的
+ *   （Supabase 寫入一直失敗時，不會一直顯示舊時間）。
+ *   不拿 data.json 的「產生時間」比：部署一定比檢查晚幾十秒，會蓋掉真正的檢查時間。
+ * - 讀不到 → fallbackLastCheck：data.json 的產生時間
+ */
 function statusRecord(remote, data) {
-  const local = fallbackLastCheck(data);
-  if (!remote) return local;
-  if (!local) return remote;
-  return Date.parse(remote.at) >= Date.parse(local.at) ? remote : local;
+  if (!remote) return fallbackLastCheck(data);
+  const lc = data && data.last_check;
+  if (lc && typeof lc.at === "string" && Date.parse(lc.at) > Date.parse(remote.at)) return lc;
+  return remote;
 }
 
 /** 用 publishable key 讀 check_status（公開資訊）。任何錯誤、逾時都回傳 null，不丟例外 */

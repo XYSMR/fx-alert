@@ -124,6 +124,8 @@ def test_build_data_full(cfg):
             ["2026-10-20T09:05:00+08:00", "0.2150"],
             ["2026-11-09T16:10:12+08:00", "0.2049"],
         ],
+        # 近 30 天（10/11–11/09）兆豐官方收盤 19 個營業日（seed/），沒有一天比 0.2049 低
+        "recent": {"days": 19, "lower": 0, "since": "2026-10-11", "enough": True},
     }
     assert krw["status"] == "waiting" and krw["distance_pct"] == 4.943
     assert len(krw["history"]) == 2  # 10/01 超過 30 天，被排除

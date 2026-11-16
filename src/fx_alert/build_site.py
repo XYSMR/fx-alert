@@ -28,6 +28,7 @@ from typing import Any
 
 from fx_alert.config import TAIPEI, AppConfig
 from fx_alert.currencies import CATALOG, SPOT_ONLY, TICK, format_price
+from fx_alert.daily import SEED_PATH, daily_closes, recent_stats
 from fx_alert.history import first_quote_at, read_alerts, read_last_check, read_quotes
 from fx_alert.notifier import BANK_LABEL, RATE_PAGE
 from fx_alert.rules import AlertState
@@ -124,8 +125,12 @@ def build_data(
     now: datetime,
     repo: str | None = None,
     public: bool = False,
+    seed_path: Path = SEED_PATH,
 ) -> dict[str, Any]:
     repo = repo or _repo()
+    # 每日收盤價（兆豐官方回補 + 我們自己的資料）：「現在的價格在近 30 天是第幾低」
+    closes = daily_closes(data_dir, seed_path=seed_path, until=now)
+    today = now.astimezone(TAIPEI).date()
     states = load_states(data_dir / "state.json")
     quotes = read_quotes(data_dir, since=now - timedelta(days=HISTORY_DAYS))
 
@@ -156,6 +161,12 @@ def build_data(
             "high": _extreme(series, max),
             "low": _extreme(series, min),
             "history": [[_iso(q.quoted_at), format_price(q.cash_sell)] for q in series],
+            # 近 30 天（日曆天）的營業日收盤價裡，有幾天比現價低；資料不足 15 天時 enough=false
+            "recent": (
+                recent_stats(closes[cur.code], latest.cash_sell, today).as_dict()
+                if latest and closes.get(cur.code)
+                else None
+            ),
         }
         if rule is not None:
             entry = states.get(cur.code)

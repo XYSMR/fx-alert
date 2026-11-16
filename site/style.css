@@ -256,3 +256,15 @@ button.link { font: inherit; background: none; border: 0; padding: 0; color: var
 .notify-window legend { font-weight: 700; padding: 0 4px; }
 .window-row { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 16px; }
 .window-row select { font: inherit; padding: 6px 8px; min-height: 40px; }
+
+/* 出國換匯計畫 */
+.trip { border-top: 1px solid var(--border); padding: 16px 0; display: grid; gap: 8px; }
+.trip h3 { margin: 0; font-size: 1.1rem; }
+.trip p { margin: 0; }
+.trip-progress { display: grid; gap: 4px; }
+.trip-progress progress { width: 100%; height: 12px; accent-color: var(--green); }
+.trip-steps { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; font-size: .95rem; }
+.trip-steps .step-done, .trip-steps .step-skipped { color: var(--muted); }
+.trip-steps .step-today { font-weight: 600; }
+.trip-exchange { margin-top: 4px; }
+.disclaimer { margin: 6px 0 4px; font-size: .9rem; color: var(--muted); font-weight: 600; }

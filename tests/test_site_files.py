@@ -16,6 +16,7 @@ def test_index_never_loads_supabase_js_statically():
     srcs = _script_srcs(INDEX)
     assert not [s for s in srcs if "supabase" in s.lower()]
     assert srcs.index("config.js") < srcs.index("account.js") < srcs.index("app.js")
+    assert srcs.index("trips.js") < srcs.index("account.js")
 
 
 def test_account_js_loads_supabase_only_inside_start():
@@ -27,7 +28,7 @@ def test_account_js_loads_supabase_only_inside_start():
 
 def test_personal_panels_hidden_by_default():
     """不管開關如何，在 JavaScript 決定之前都不會先顯示登入或個人區塊。"""
-    for el_id in ("account", "my-rules", "my-alerts", "alerts-panel", "edit-panel"):
+    for el_id in ("account", "my-rules", "my-trips", "my-alerts", "alerts-panel", "edit-panel"):
         tag = re.search(rf'<[^>]*\sid="{el_id}"[^>]*>', INDEX)
         assert tag and " hidden" in tag.group(0), el_id
 

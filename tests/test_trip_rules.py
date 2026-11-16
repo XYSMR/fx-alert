@@ -116,3 +116,17 @@ def test_simulation_script_runs(capsys):
     assert sim.main(["--codes", "JPY", "--since", "2026-10-01"]) == 0
     out = capsys.readouterr().out
     assert "JPY：" in out and "last_call 1.00" in out
+
+
+def test_js_fixture_matches_python():
+    """site/tests/trips.test.js 用這份檔案比對前端算的提醒日期；規則改了要重新產生。"""
+    import importlib.util
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("fx", root / "scripts" / "make_trip_fixture.py")
+    fx = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fx)
+    saved = json.loads((root / "tests" / "fixtures" / "trip_schedules.json").read_text("utf-8"))
+    assert saved == fx.build(), "請執行 python scripts/make_trip_fixture.py"

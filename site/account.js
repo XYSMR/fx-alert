@@ -322,6 +322,7 @@ let state = { session: null, profile: null, rules: [], notifications: [] };
 let publicList = [];
 let notify = () => {};
 let viewing = null;
+let bankCalendar = null; // data.json 的 bank_calendar（換匯計畫算提醒日期用）
 let windowSupported = true; // 資料庫有沒有通知時段欄位（migration 還沒套用時是 false） // 上方下拉選單正在看的幣別（app.js 的 fx:selected）
 
 const byId = (id) => document.getElementById(id);
@@ -442,6 +443,7 @@ async function refresh() {
     state = { session: null, profile: null, rules: [], notifications: [] };
     byId("my-rules").hidden = true;
     byId("my-alerts").hidden = true;
+    if (window.FxTrips) window.FxTrips.hide();
     renderAccount();
     notify(publicList, false);
     return;
@@ -461,6 +463,7 @@ async function refresh() {
   renderRules();
   renderNotifications();
   notify(personalCurrencies(publicList, state.rules, state.profile), true);
+  if (window.FxTrips) await window.FxTrips.show(client, publicList, bankCalendar);
 }
 
 // ---------- 我的提醒 ----------
@@ -755,8 +758,9 @@ function renderNotifications() {
 
 // ---------- 啟動 ----------
 
-async function start(auth, currencies, onChange) {
+async function start(auth, currencies, onChange, calendar = null) {
   publicList = currencies;
+  bankCalendar = calendar;
   notify = onChange;
   document.addEventListener("fx:selected", (e) => {
     viewing = e.detail.code;

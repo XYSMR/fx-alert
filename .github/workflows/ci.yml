@@ -25,6 +25,23 @@ jobs:
       - name: Validate config.yaml
         run: python -m fx_alert validate-config
 
+      # 部署和排程都是 pip install .（非 editable）：程式在 site-packages，seed/ 要從 repo 根目錄找到
+      # （#27～#30 時找不到也不會報錯，正式網站的「近 30 天」只用到自己記錄的幾天）
+      - name: Non-editable install finds seed/
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys
+          from fx_alert.bizdays import CALENDAR_PATH, load_calendar
+          from fx_alert.daily import SEED_PATH, read_seed
+          for p in (SEED_PATH, CALENDAR_PATH):
+              assert "site-packages" not in str(p) and p.is_file(), p
+          assert len(read_seed()["USD"]) == 243
+          assert load_calendar().covered_until.isoformat() == "2027-12-31"
+          subprocess.run([sys.executable, "-m", "fx_alert", "build-site", "--out", "/tmp/data.json", "--public"], check=True)
+          assert json.load(open("/tmp/data.json"))["bank_calendar"]["off"]
+          print("seed/ OK:", SEED_PATH, CALENDAR_PATH)
+          PY
+
       # 會被公開的檔案（前端、範例資料、設定檔）不能出現 email 或 SMTP 設定
       - name: Check public files for secrets
         run: |

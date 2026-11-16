@@ -20,7 +20,9 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 
-CALENDAR_PATH = Path(__file__).resolve().parents[2] / "seed" / "tw_bank_calendar.csv"
+from fx_alert.paths import repo_file
+
+CALENDAR_PATH = repo_file("seed/tw_bank_calendar.csv")
 COVERED_FROM = date(2025, 11, 17)
 COVERED_UNTIL = date(2027, 12, 31)
 

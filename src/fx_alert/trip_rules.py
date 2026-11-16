@@ -53,6 +53,7 @@ class Schedule:
     near_on: date
     final_on: date
     last_call: date
+    spare: date  # 出發前最後一個營業日（last_call 之後的備用日）
 
     def phase(self, today: date) -> str:
         if today >= self.departure:
@@ -74,7 +75,7 @@ def schedule(departure: date, cal: Calendar) -> Schedule:
         cal.on_or_before(departure - timedelta(days=FINAL_DAYS)), cal.before(departure, 3)
     )
     near_on = min(cal.on_or_before(departure - timedelta(days=NEAR_DAYS)), cal.before(final_on, 1))
-    return Schedule(departure, near_on, final_on, last_call)
+    return Schedule(departure, near_on, final_on, last_call, cal.before(departure, 1))
 
 
 @dataclass(frozen=True)

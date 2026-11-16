@@ -187,6 +187,7 @@ def test_main_logs_note_when_window_columns_missing(tmp_path):
         ),
         FakeResponse(body=[]),
         FakeResponse(200, [], headers={"Content-Range": "*/0"}),
+        FakeResponse(body=[]),  # load_trips
         FakeResponse(201, None),  # record_check
     )
     logs = []

@@ -309,3 +309,51 @@ def test_active_trips_service_only(db, alice):
     db.fails("select * from public.active_trips", sqlstate=DENIED)
     db.as_anon()
     db.fails("select * from public.trip_progress", sqlstate=DENIED)
+
+
+# ---------------------------------------------------------------------------
+# 排程程式（store.py）實際送出的欄位要和資料庫一致
+# ---------------------------------------------------------------------------
+
+
+def test_store_columns_and_payload_match_database(db, alice):
+    import json
+    from datetime import datetime
+
+    from fx_alert.config import TAIPEI
+    from fx_alert.store import _TRIP_COLUMNS, SupabaseConfig, SupabaseStore
+    from fx_alert.trip_rules import Decision
+
+    trip = add_trip(db, alice)
+    add_notice(db, trip, "cheap_far", days_ago=3)
+
+    # 1. load_trips 讀的欄位（::text 是 PostgREST 的轉型寫法，SQL 也通用）
+    db.as_service()
+    row = db.one(f"select row_to_json(t) from (select {_TRIP_COLUMNS} from public.active_trips) t")
+    assert row["remaining"] == "50000.00" and row["sent"][0]["kind"] == "cheap_far"
+
+    # 2. record_trip_notice 送出的 JSON 直接寫進資料表
+    class Capture:
+        def request(self, method, url, **kw):
+            self.json = kw["json"]
+
+            class R:
+                ok, status_code, headers = True, 201, {}
+
+            return R()
+
+    from fx_alert.store import _row_to_trip
+
+    cap = Capture()
+    cfg = SupabaseConfig("https://abcdefghijklmnopqrst.supabase.co", "k")
+    store = SupabaseStore(cfg, session=cap)
+    now = datetime.now(TAIPEI)
+    store.record_trip_notice(_row_to_trip(row), Decision("final", 7), D("0.2049"), now)
+    cols = ", ".join(cap.json)
+    db.as_service()
+    db.run(
+        f"insert into public.trip_notifications ({cols}) "
+        f"select {cols} from jsonb_populate_record(null::public.trip_notifications, %s::jsonb)",
+        (json.dumps(cap.json),),
+    )
+    assert db.one("select count(*) from public.trip_notifications where kind = 'final'") == 1

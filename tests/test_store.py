@@ -582,6 +582,7 @@ def test_supabase_store_deleted_rule_end_to_end(tmp_path):
         FakeResponse(200, [], headers={"Content-Range": "*/0"}),  # count_sent_since
         FakeResponse(body=None),  # record_alert #1 → null（帳號已刪除）
         FakeResponse(body=42),  # record_alert #2
+        FakeResponse(body=[]),  # load_trips（沒有旅程）
         FakeResponse(201, None),  # record_check
     )
     store = SupabaseStore(SupabaseConfig(URL, KEY), session=session)
@@ -623,6 +624,7 @@ def test_check_status_failure_is_only_a_note(tmp_path):
     session = FakeSession(
         FakeResponse(body=[]),  # load_watches
         FakeResponse(200, [], headers={"Content-Range": "*/0"}),  # count_sent_since
+        FakeResponse(body=[]),  # load_trips
         FakeResponse(404, {"message": "relation public.check_status does not exist"}),
     )
     store = SupabaseStore(SupabaseConfig(URL, KEY), session=session)

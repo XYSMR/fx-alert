@@ -254,7 +254,7 @@ def test_load_watches_errors_become_store_error_without_secrets(response):
 
 
 def _watch(state=ARMED, key="7"):
-    return Watch(key, f"JPY 規則#{key}", Rule("JPY", D("0.205"), D("0.001")), state, None, ())
+    return Watch(key, f"規則#{key}", Rule("JPY", D("0.205"), D("0.001")), state, None, ())
 
 
 def test_record_alert_calls_rpc():
@@ -404,7 +404,7 @@ class MemoryStore:
 
 
 def user_watch(key, email, target="0.205", state=None):
-    return Watch(key, f"JPY 規則#{key}", Rule("JPY", D(target), D("0.001")), state, None, (email,))
+    return Watch(key, f"規則#{key}", Rule("JPY", D(target), D("0.001")), state, None, (email,))
 
 
 def run(tmp_path, store, notifier=None, logs=None):
@@ -430,7 +430,7 @@ def test_each_user_gets_own_email(tmp_path):
     n = DryRunNotifier(out=io.StringIO())
     r = run(tmp_path, store, n)
     assert [m["To"] for m in n.sent] == ["alice@example.com", "carol@example.com"]
-    assert r.notified == ["JPY 規則#1", "JPY 規則#3"]
+    assert r.notified == ["規則#1", "規則#3"]
     assert [k for k, _ in store.alerts] == ["1", "3"]
     assert store.transitions == [("2", ARMED)]
     assert r.exit_code == 0
@@ -457,9 +457,9 @@ def test_record_failure_for_one_rule_does_not_block_others(tmp_path):
         fail_alert_for=("1",),
     )
     r = run(tmp_path, store)
-    assert r.notified == ["JPY 規則#1", "JPY 規則#2"]  # 兩封都寄了
+    assert r.notified == ["規則#1", "規則#2"]  # 兩封都寄了
     assert [k for k, _ in store.alerts] == ["2"]
-    assert r.errors == ["JPY 規則#1 狀態寫入失敗：Supabase 回應 500：boom"]
+    assert r.errors == ["規則#1 狀態寫入失敗：Supabase 回應 500：boom"]
 
 
 def test_logs_and_errors_never_contain_email(tmp_path):
@@ -483,8 +483,8 @@ def test_daily_limit_defers_extra_notifications(tmp_path):
     )
     n = DryRunNotifier(out=io.StringIO())
     r = run(tmp_path, store, n)  # 上限 400，今天已寄 398 → 只能再寄 2 封
-    assert r.notified == ["JPY 規則#1", "JPY 規則#2"]
-    assert r.deferred == ["JPY 規則#3"]
+    assert r.notified == ["規則#1", "規則#2"]
+    assert r.deferred == ["規則#3"]
     assert [k for k, _ in store.alerts] == ["1", "2"]  # 規則#3 的狀態不更新，下次再試
     assert len(n.sent) == 2
     assert r.exit_code == 0  # 延後不算錯誤
@@ -495,7 +495,7 @@ def test_daily_limit_reached_sends_nothing(tmp_path):
     store = MemoryStore([user_watch("1", "a@example.com")], sent_today=400)
     logs = []
     r = run(tmp_path, store, logs=logs)
-    assert r.notified == [] and r.deferred == ["JPY 規則#1"] and store.alerts == []
+    assert r.notified == [] and r.deferred == ["規則#1"] and store.alerts == []
     assert any("延後 1 封" in line for line in logs)
 
 
@@ -514,7 +514,7 @@ def test_failed_send_does_not_use_up_daily_quota(tmp_path):
         [user_watch("1", "a@example.com"), user_watch("2", "b@example.com")], sent_today=399
     )
     r = run(tmp_path, store, FailFirst())
-    assert r.notified == ["JPY 規則#2"] and r.deferred == []
+    assert r.notified == ["規則#2"] and r.deferred == []
 
 
 def test_count_failure_stops_sending(tmp_path):
@@ -538,7 +538,7 @@ def test_send_error_with_address_is_redacted(tmp_path):
     store = MemoryStore([user_watch("1", "alice@example.com")])
     r = run(tmp_path, store, Refused())
     assert r.errors == [
-        "JPY 規則#1 通知失敗，狀態不更新：寄信失敗：SMTPRecipientsRefused: {'***': (550, b'no')}"
+        "規則#1 通知失敗，狀態不更新：寄信失敗：SMTPRecipientsRefused: {'***': (550, b'no')}"
     ]
 
 
@@ -559,8 +559,8 @@ def test_deleted_user_during_check_is_skipped_without_failing(tmp_path):
     r = run(tmp_path, store, logs=logs)
     assert r.exit_code == 0 and r.errors == []
     assert [k for k, _ in store.alerts] == ["2"]
-    assert any("JPY 規則#1: 規則已不存在" in line for line in logs)
-    assert any("JPY 規則#3: 規則在檢查期間被變更或刪除" in line for line in logs)
+    assert any("規則#1: 規則已不存在" in line for line in logs)
+    assert any("規則#3: 規則在檢查期間被變更或刪除" in line for line in logs)
     assert all("@" not in line for line in logs)
 
 
@@ -598,7 +598,7 @@ def test_supabase_store_deleted_rule_end_to_end(tmp_path):
         store=store,
     )
     assert r.exit_code == 0 and r.errors == []
-    assert r.notified == ["JPY 規則#1", "JPY 規則#2"]
+    assert r.notified == ["規則#1", "規則#2"]
     assert any("規則#1: 規則已不存在" in line for line in logs)
     assert r.state_changed is True
 

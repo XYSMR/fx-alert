@@ -25,6 +25,12 @@ check 每次執行：
 出國換匯計畫（多人版，store 有 load_trips 時）：到價提醒之後，對每趟旅程用 trip_rules.decide 判斷
 今天要不要寄、寄哪一種（見 _check_trips）。和到價提醒共用通知時段、每日寄信上限、退訂連結。
 
+公開 log 的原則（LOG_PRIVACY；GitHub Actions 的 log 在 public repo 任何人都看得到）：
+  只寫「規則#N」「旅程#N」這類編號、狀態、提醒種類和公開的牌告資訊。
+  不寫 email、目標價、buffer、通知時段、外幣金額、出發日或距離出發的天數。
+  CLI 印出的每一行還會再經過 redact_emails（萬一錯誤訊息帶了 email）。
+  tests/test_log_privacy.py 用含有這些值的假資料跑一次，檢查輸出裡都找不到。
+
 結束碼：0 = 一切正常（含略過、延後）；1 = 有任何錯誤（抓取、解析、寄信、設定）。
 """
 
@@ -192,20 +198,15 @@ def _check_rates(
         rate = rates[rule.currency]
         decision = decide(rule, rate, w.state, w.state_target)
         prev_label = w.state.value if w.state else "（無紀錄）"
-        log(
-            f"{w.label}: 現金賣出 {rate}（目標 ≤ {rule.target}）"
-            f" {prev_label} → {decision.next_state.value}：{decision.reason}"
-        )
+        # 公開的 log：只寫規則編號和狀態，不寫幣別、匯率、目標價（見 LOG_PRIVACY）
+        log(f"{w.label}: {prev_label} → {decision.next_state.value}：{decision.reason}")
 
         try:
             if decision.notify and w.window and not w.window.contains(local_now):
                 # 不在通知時段：不寄、狀態不變（還是等待中）。時段開始後的第一次檢查會重新判斷，
                 # 那時匯率還在目標以下才寄；已經回升就繼續等待，不補寄
                 result.outside_window.append(w.label)
-                log(
-                    f"{w.label}: 已到價，但不在通知時段（台灣時間 {w.window.label()}），"
-                    "時段開始後重新判斷"
-                )
+                log(f"{w.label}: 不在通知時段，時段開始後重新判斷")
                 continue
             if decision.notify:
                 if remaining <= 0:
@@ -349,13 +350,18 @@ def _check_trips(
             continue
         remaining -= 1
         result.trip_notified.append(f"{t.label}: {decision.kind}")
-        log(f"{t.label}: 寄出換匯提醒 {decision.kind}（距離出發 {decision.days_left} 天）")
+        log(f"{t.label}: 寄出換匯提醒 {decision.kind}")
         try:
             if not store.record_trip_notice(t, decision, rate, local_now):
                 log(f"{t.label}: 提醒紀錄已存在或旅程剛被刪除，略過記錄")
         except StoreError as exc:
             result.errors.append(f"{t.label} 換匯提醒紀錄寫入失敗：{exc}")
     return remaining
+
+
+def _public_log(line: str) -> None:
+    """印到 Actions 的公開 log；保險起見再遮一次 email。"""
+    print(redact_emails(line))
 
 
 def _write_github_output(result: CheckResult) -> None:
@@ -402,6 +408,7 @@ def _cmd_check(args) -> int:
         email_cfg,
         now=datetime.now(TAIPEI),
         force=args.force,
+        log=_public_log,
         store=store,
         unsubscribe=unsubscribe,
         track=CODES if args.mode == "multi" else (),  # 多人版記錄全部 18 種幣別的走勢
@@ -535,9 +542,9 @@ def _cmd_validate_config(args) -> int:
     days = "平日" if h.weekdays_only else "每天"
     print(f"config.yaml 驗證通過：檢查時段 {days} {h.start:%H:%M}–{h.end:%H:%M}")
     print(f"  每天最多寄 {cfg.daily_limit} 封到價通知")
-    for r in cfg.rules:
-        rearm = f"回升到 > {r.rearm_above} 重新上膛"
-        print(f"  {r.currency}: 目標 ≤ {r.target}，buffer {r.buffer}（{rearm}）")
+    # CI 的 log 是公開的：只列幣別，不印目標價和 buffer
+    codes = "、".join(r.currency for r in cfg.rules) or "（無）"
+    print(f"  config.yaml 的規則：{len(cfg.rules)} 條（{codes}）")
     return 0
 
 

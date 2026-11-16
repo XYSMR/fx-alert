@@ -138,9 +138,7 @@ NOW = datetime(2026, 11, 9, 10, 7, tzinfo=TAIPEI)
 
 class OneWatchStore:
     def __init__(self, user_id):
-        self.watch = Watch(
-            "1", "JPY 規則#1", JPY, None, None, ("alice@example.com",), user_id=user_id
-        )
+        self.watch = Watch("1", "規則#1", JPY, None, None, ("alice@example.com",), user_id=user_id)
 
     def load_watches(self):
         return [self.watch]

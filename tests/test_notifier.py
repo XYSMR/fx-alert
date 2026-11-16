@@ -163,7 +163,7 @@ def test_dry_run_records_without_sending(cfg):
     n.send(msg)
     assert n.sent == [msg]
     assert "[dry-run]" in out.getvalue()
-    assert "JPY 到價" in out.getvalue()
+    assert out.getvalue() == "[dry-run] 不寄出：收件人 2 位\n"  # 不印主旨（含目標價）
 
 
 # ---------- 手動測試指令 ----------

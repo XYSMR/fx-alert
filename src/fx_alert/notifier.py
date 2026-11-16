@@ -191,9 +191,10 @@ class DryRunNotifier:
     def send(self, msg: EmailMessage) -> None:
         self.sent.append(msg)
         out = self._out or sys.stdout
-        # 不印出收件人地址：多人版的 dry-run 也可能在公開的 Actions log 裡執行
+        # 不印出收件人和主旨：多人版的 dry-run 在公開的 Actions log 裡執行，
+        # 主旨含有目標價（到價通知）或距離出發天數（換匯提醒）
         count = len([a for a in str(msg["To"] or "").split(",") if a.strip()])
-        print(f"[dry-run] 不寄出：收件人 {count} 位，Subject={msg['Subject']}", file=out)
+        print(f"[dry-run] 不寄出：收件人 {count} 位", file=out)
 
 
 def _main(argv: list[str]) -> int:

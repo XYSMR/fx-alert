@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from fx_alert import gate
+from fx_alert.config import TAIPEI
 
 NOW = datetime(2026, 11, 11, 1, 7, tzinfo=UTC)  # 台灣 09:07（GitHub 排程的時間）
 
@@ -134,4 +135,67 @@ def test_gate_uses_only_standard_library():
         if isinstance(n, ast.Import | ast.ImportFrom)
         for a in (n.names if isinstance(n, ast.Import) else [n])
     }
-    assert mods <= {"__future__", "argparse", "json", "os", "sys", "datetime", "pathlib"}
+    allowed = {"__future__", "argparse", "json", "os", "sys", "datetime", "pathlib", "urllib"}
+    assert mods <= allowed
+
+
+# ---------- 讀 Supabase 的 check_status（讀不到就用 state 分支） ----------
+
+
+def test_from_check_status():
+    rows = [{"checked_at": "2026-11-16T01:05:00+00:00", "ok": True, "errors": 0}]
+    assert gate.from_check_status(rows) == {
+        "at": "2026-11-16T01:05:00+00:00",
+        "ok": True,
+        "errors": 0,
+    }
+    assert gate.from_check_status([]) is None  # 還沒有任何檢查
+    assert gate.from_check_status({"message": "relation does not exist"}) is None
+    assert gate.from_check_status([{"ok": True}]) is None
+
+
+def test_newest_prefers_latest_record():
+    supa = {"at": "2026-11-16T01:05:00+00:00", "ok": True}  # 09:05 台灣時間
+    state = {"at": "2026-11-13T22:10:11+08:00", "ok": True}  # state 分支只在資料有變時更新
+    assert gate.newest(supa, state) is supa
+    assert gate.newest(None, state) is state
+    assert gate.newest({"at": "壞掉"}, state) is state
+    assert gate.newest(None, None) is None
+
+
+def test_fetch_check_status_without_config_or_network_returns_none():
+    assert gate.fetch_check_status("", "") is None
+    # 連不到（保留網段，不會真的連出去）：回傳 None，不丟例外
+    assert gate.fetch_check_status("http://192.0.2.1", "sb_publishable_x", timeout=0.2) is None
+
+
+def test_main_uses_supabase_record(tmp_path, monkeypatch, capsys):
+    """Supabase 說 5 分鐘前剛檢查過 → 略過；state 分支的舊紀錄不影響。"""
+    old = tmp_path / "last_check.json"
+    old.write_text('{"at": "2026-11-13T22:10:11+08:00", "ok": true, "errors": 0}', "utf-8")
+    monkeypatch.setattr(
+        gate,
+        "fetch_check_status",
+        lambda url, key: {"at": "2026-11-16T09:05:30+08:00", "ok": True, "errors": 0},
+    )
+    out = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    now = datetime(2026, 11, 16, 9, 7, tzinfo=TAIPEI)
+    gate.main(["--last-check", str(old), "--event", "schedule"], now=now)
+    assert "run=false" in out.read_text("utf-8")
+    assert "Supabase check_status 讀得到" in capsys.readouterr().out
+
+
+def test_main_falls_back_to_state_branch(tmp_path, monkeypatch, capsys):
+    """Supabase 讀不到（例如專案暫停）：用 state 分支的紀錄；太舊就照常檢查。"""
+    old = tmp_path / "last_check.json"
+    old.write_text('{"at": "2026-11-13T22:10:11+08:00", "ok": true, "errors": 0}', "utf-8")
+    monkeypatch.setattr(gate, "fetch_check_status", lambda url, key: None)
+    out = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    gate.main(
+        ["--last-check", str(old), "--event", "schedule"],
+        now=datetime(2026, 11, 16, 9, 7, tzinfo=TAIPEI),
+    )
+    assert "run=true" in out.read_text("utf-8")
+    assert "讀不到，改用 state 分支" in capsys.readouterr().out

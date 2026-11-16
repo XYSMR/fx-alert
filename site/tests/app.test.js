@@ -497,3 +497,69 @@ test("homeRows：只列有目標價的幣別，已到價排最前，其餘依距
   assert.equal(rows[3].badge, "已停用");
   assert.deepEqual(app.homeRows([{ code: "USD", name: "美元", rate: "33.0000", target: null }]), []);
 });
+
+// ---------- 狀態列：Supabase check_status，讀不到就用 data.json 的產生時間 ----------
+
+const CS_HOURS = { weekdays_only: true, start: "09:00", end: "16:30", first_check: "09:05", interval_minutes: 30 };
+const CS_DATA = {
+  generated_at: "2026-11-16T09:05:40+08:00",
+  last_check: { at: "2026-11-16T09:05:30+08:00", ok: true, errors: 0 },
+  business_hours: CS_HOURS,
+};
+const CS_AT = (s) => new Date(s);
+
+test("checkStatusRecord：只接受一列、時間和 ok 都正確的資料", () => {
+  assert.deepEqual(app.checkStatusRecord([{ checked_at: "2026-11-16T01:35:00+00:00", ok: true, errors: 0 }]),
+    { at: "2026-11-16T01:35:00+00:00", ok: true, errors: 0 });
+  assert.equal(app.checkStatusRecord([]), null); // 還沒有任何檢查
+  assert.equal(app.checkStatusRecord({ message: "relation does not exist" }), null);
+  assert.equal(app.checkStatusRecord([{ checked_at: "壞掉", ok: true }]), null);
+  assert.equal(app.checkStatusRecord([{ checked_at: "2026-11-16T01:35:00+00:00" }]), null);
+});
+
+test("Supabase 讀不到：狀態列用 data.json 的產生時間，不顯示錯誤也不留白", async () => {
+  // 專案暫停／網路錯誤／逾時／404 → 全部回傳 null，不丟例外
+  const auth = { url: "https://example.supabase.co", key: "sb_publishable_x" };
+  assert.equal(await app.fetchCheckStatus(auth, { fetchFn: async () => { throw new TypeError("Failed to fetch"); } }), null);
+  assert.equal(await app.fetchCheckStatus(auth, { fetchFn: async () => ({ ok: false, status: 540, json: async () => ({}) }) }), null);
+  assert.equal(await app.fetchCheckStatus(auth, { fetchFn: async () => ({ ok: true, json: async () => { throw new SyntaxError("x"); } }) }), null);
+  const hang = (url, opts) => new Promise((_, reject) => opts.signal.addEventListener("abort", () => reject(new Error("aborted"))));
+  assert.equal(await app.fetchCheckStatus(auth, { fetchFn: hang, timeoutMs: 20 }), null);
+  assert.equal(await app.fetchCheckStatus(null), null); // 單人版：沒有 Supabase 設定
+
+  const lc = app.statusRecord(null, CS_DATA);
+  assert.deepEqual(lc, { at: "2026-11-16T09:05:40+08:00", ok: true, errors: 0 });
+  const s = app.statusLine({ ...CS_DATA, last_check: lc }, CS_AT("2026-11-16T09:20:00+08:00"));
+  assert.equal(s.tone, "ok");
+  assert.match(s.text, /^✓ 資料正常・11\/16 09:05 更新/);
+  // 一整天都讀不到 Supabase：頂多提醒「可能過期」，不會變成錯誤
+  const later = app.statusLine({ ...CS_DATA, last_check: lc }, CS_AT("2026-11-16T14:00:00+08:00"));
+  assert.equal(later.tone, "warn");
+  assert.ok(later.text.includes("11/16 09:05"));
+  // data.json 沒有 last_check（例如第一次部署）也有時間可以顯示
+  const noLc = app.statusLine({ ...CS_DATA, last_check: app.statusRecord(null, { ...CS_DATA, last_check: null }) },
+    CS_AT("2026-11-16T09:20:00+08:00"));
+  assert.notEqual(noLc.text, "");
+  assert.ok(noLc.text.includes("09:05"));
+});
+
+test("Supabase 讀得到：用比較新的那一份（check_status 每次檢查都更新）", async () => {
+  const auth = { url: "https://example.supabase.co", key: "sb_publishable_x" };
+  let seen;
+  const fetchFn = async (url, opts) => {
+    seen = { url, opts };
+    return { ok: true, json: async () => [{ checked_at: "2026-11-16T03:35:10+00:00", ok: true, errors: 0 }] };
+  };
+  const remote = await app.fetchCheckStatus(auth, { fetchFn });
+  assert.equal(seen.url, "https://example.supabase.co/rest/v1/check_status?select=checked_at,ok,errors&id=eq.1");
+  assert.equal(seen.opts.headers.apikey, "sb_publishable_x");
+  assert.equal(app.statusRecord(remote, CS_DATA), remote);
+  const s = app.statusLine({ ...CS_DATA, last_check: app.statusRecord(remote, CS_DATA) }, CS_AT("2026-11-16T11:40:00+08:00"));
+  assert.match(s.text, /11\/16 11:35 更新/);
+  // Supabase 的紀錄比 data.json 舊（例如寫入一直失敗）：用 data.json 的
+  const old = { at: "2026-11-13T14:10:00+08:00", ok: true, errors: 0 };
+  assert.equal(app.statusRecord(old, CS_DATA).at, CS_DATA.generated_at);
+  // 最近一次檢查失敗：照實顯示
+  const failed = { at: "2026-11-16T11:35:10+08:00", ok: false, errors: 1 };
+  assert.equal(app.statusLine({ ...CS_DATA, last_check: app.statusRecord(failed, CS_DATA) }, CS_AT("2026-11-16T11:40:00+08:00")).tone, "bad");
+});

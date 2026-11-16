@@ -11,7 +11,9 @@ check 每次執行：
   3. 每個幣別用狀態機判斷；要通知就寄信
      - 寄信成功 → 更新狀態、記一筆通知紀錄
      - 寄信失敗 → 狀態維持原樣（下次執行再試），本次結束碼為 1
-  4. 寫出狀態（有變才寫）和 last_check.json（每次都寫）
+  4. 寫出狀態（有變才寫）和 last_check.json（每次都寫）；
+     多人版另外把檢查結果寫到 Supabase 的 check_status（gate 和網頁狀態列讀它），
+     所以 state 分支只在走勢、狀態、通知紀錄有變時才需要 commit（見 publish.py）
 
 --mode single（預設）：config.yaml + state.json，收件人 MAIL_TO。
 --mode multi：Supabase（SUPABASE_URL、SUPABASE_SECRET_KEY），每個人寄給自己；
@@ -36,7 +38,7 @@ from pathlib import Path
 from fx_alert.config import TAIPEI, AppConfig, ConfigFileError, load_config
 from fx_alert.currencies import CODES, SPOT_ONLY
 from fx_alert.fetcher import FetchError, fetch_rates_json
-from fx_alert.history import append_quotes, write_last_check
+from fx_alert.history import append_quotes, convert_monthly_history, write_last_check
 from fx_alert.notifier import (
     ConfigError,
     DryRunNotifier,
@@ -101,14 +103,35 @@ def run_check(
         return result
 
     store = store or FileStore(cfg, recipients=email_cfg.to)
+    _convert_history(cfg, log)
     try:
         _check_rates(
             cfg, store, notifier, email_cfg, local_now, fetch, result, log, unsubscribe, track
         )
     finally:
         # 不論成功失敗都記錄這次檢查，頁面才看得出系統還活著
-        write_last_check(cfg.data_dir, local_now, ok=not result.errors, errors=len(result.errors))
+        ok, errors = not result.errors, len(result.errors)
+        write_last_check(cfg.data_dir, local_now, ok=ok, errors=errors)
+        record = getattr(store, "record_check", None)
+        if record is not None:
+            try:
+                record(local_now, ok, errors)
+            except StoreError as exc:
+                # 寫不進去（例如 check_status 的 migration 還沒套用）不算錯誤：
+                # gate 會照常檢查、網頁會退回用 data.json 的時間，只是提醒一下
+                log(f"注意：檢查狀態沒有寫到 Supabase（{exc}）")
     return result
+
+
+def _convert_history(cfg: AppConfig, log: Callable[[str], None]) -> None:
+    """舊格式的走勢（每月一檔）拆成每天一檔。只會發生一次；失敗不影響檢查（兩種格式都讀得到）。"""
+    try:
+        months = convert_monthly_history(cfg.data_dir)
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
+        log(f"注意：走勢檔案轉換成每天一檔失敗，先沿用舊格式（{type(exc).__name__}：{exc}）")
+        return
+    if months:
+        log(f"走勢：把 {', '.join(months)} 的月份檔拆成每天一檔")
 
 
 def _check_rates(

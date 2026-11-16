@@ -6,6 +6,8 @@ from fx_alert.config import TAIPEI
 from fx_alert.history import (
     append_alert,
     append_quotes,
+    convert_monthly_history,
+    first_quote_at,
     read_alerts,
     read_last_check,
     read_quotes,
@@ -17,9 +19,9 @@ Q2 = datetime(2026, 11, 9, 11, 30)
 RATES = {"KRW": D("0.0264"), "JPY": D("0.2121")}
 
 
-def test_append_quotes_writes_monthly_csv(tmp_path):
+def test_append_quotes_writes_daily_csv(tmp_path):
     assert append_quotes(tmp_path, Q1, RATES) is True
-    text = (tmp_path / "history" / "2026-11.csv").read_text(encoding="utf-8")
+    text = (tmp_path / "history" / "2026-11-09.csv").read_text(encoding="utf-8")
     assert text == (
         "quoted_at,currency,cash_sell\n"
         "2026-11-09T09:05:00+08:00,JPY,0.2121\n"
@@ -40,12 +42,13 @@ def test_no_quote_time_or_no_rates_records_nothing(tmp_path):
     assert not (tmp_path / "history").exists()
 
 
-def test_new_month_goes_to_new_file(tmp_path):
+def test_each_day_goes_to_its_own_file(tmp_path):
     append_quotes(tmp_path, datetime(2026, 10, 31, 16, 0), RATES)
     append_quotes(tmp_path, datetime(2026, 11, 2, 9, 5), RATES)
+    append_quotes(tmp_path, datetime(2026, 11, 2, 23, 35), RATES)  # 台灣時間的日期
     assert sorted(p.name for p in (tmp_path / "history").iterdir()) == [
-        "2026-10.csv",
-        "2026-11.csv",
+        "2026-10-31.csv",
+        "2026-11-02.csv",
     ]
 
 
@@ -97,3 +100,75 @@ def test_files_use_lf(tmp_path):
     write_last_check(tmp_path, Q1, ok=True, errors=0)
     for p in tmp_path.rglob("*.*"):
         assert b"\r\n" not in p.read_bytes(), p
+
+
+# ---------- 舊格式（每月一檔）轉換成每天一檔 ----------
+
+
+def _write_monthly(tmp_path, name, rows):
+    folder = tmp_path / "history"
+    folder.mkdir(parents=True, exist_ok=True)
+    lines = ["quoted_at,currency,cash_sell"] + [",".join(r) for r in rows]
+    (folder / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+MONTH_ROWS = [
+    ("2026-11-09T09:05:00+08:00", "JPY", "0.2121"),
+    ("2026-11-09T09:05:00+08:00", "KRW", "0.0264"),
+    ("2026-11-10T16:05:00+08:00", "JPY", "0.2118"),
+    ("2026-11-10T16:05:00+08:00", "KRW", "0.0263"),
+    ("2026-11-13T22:10:11+08:00", "JPY", "0.2090"),
+]
+
+
+def test_old_monthly_files_are_still_readable(tmp_path):
+    """部署順序：新程式上線、state 分支還沒轉換時，走勢圖不能斷。"""
+    _write_monthly(tmp_path, "2026-11.csv", MONTH_ROWS)
+    append_quotes(tmp_path, datetime(2026, 11, 16, 9, 5), RATES)  # 新的一筆寫到每日檔
+    quotes = read_quotes(tmp_path, datetime(2026, 11, 1, tzinfo=TAIPEI))
+    assert len(quotes) == 7
+    assert first_quote_at(tmp_path) == datetime(2026, 11, 9, 9, 5, tzinfo=TAIPEI)
+
+
+def test_convert_monthly_history_keeps_every_quote(tmp_path):
+    _write_monthly(tmp_path, "2026-10.csv", [("2026-10-31T16:05:00+08:00", "JPY", "0.2140")])
+    _write_monthly(tmp_path, "2026-11.csv", MONTH_ROWS)
+    since = datetime(2026, 10, 1, tzinfo=TAIPEI)
+    before = read_quotes(tmp_path, since)
+
+    assert convert_monthly_history(tmp_path) == ["2026-10", "2026-11"]
+    assert sorted(p.name for p in (tmp_path / "history").iterdir()) == [
+        "2026-10-31.csv",
+        "2026-11-09.csv",
+        "2026-11-10.csv",
+        "2026-11-13.csv",
+    ]
+    assert read_quotes(tmp_path, since) == before  # 走勢圖不會因為改版而重新開始
+    assert first_quote_at(tmp_path) == datetime(2026, 10, 31, 16, 5, tzinfo=TAIPEI)
+    assert (tmp_path / "history" / "2026-11-09.csv").read_text(encoding="utf-8") == (
+        "quoted_at,currency,cash_sell\n"
+        "2026-11-09T09:05:00+08:00,JPY,0.2121\n"
+        "2026-11-09T09:05:00+08:00,KRW,0.0264\n"
+    )
+    # 再執行一次：沒有東西要轉換，資料不變
+    assert convert_monthly_history(tmp_path) == []
+    assert read_quotes(tmp_path, since) == before
+
+
+def test_convert_merges_with_existing_daily_file(tmp_path):
+    """月份檔和每日檔有同一天（例如轉換前一刻剛記了一筆）：合併、不重複。"""
+    _write_monthly(tmp_path, "2026-11.csv", MONTH_ROWS)
+    append_quotes(tmp_path, datetime(2026, 11, 9, 9, 5), RATES)  # 和月份檔重複
+    append_quotes(tmp_path, datetime(2026, 11, 9, 9, 35), RATES)  # 新的
+    convert_monthly_history(tmp_path)
+    day = read_quotes(tmp_path, datetime(2026, 11, 9, tzinfo=TAIPEI))
+    assert [(q.quoted_at.minute, q.currency) for q in day if q.quoted_at.day == 9] == [
+        (5, "JPY"),
+        (5, "KRW"),
+        (35, "JPY"),
+        (35, "KRW"),
+    ]
+
+
+def test_convert_with_no_history(tmp_path):
+    assert convert_monthly_history(tmp_path) == []

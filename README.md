@@ -72,7 +72,7 @@ flowchart LR
   pages["GitHub Pages<br/>site/（只有 publishable key）"]
   subgraph supa["Supabase（免費方案）"]
     auth["Auth<br/>Google 登入"]
-    db[("Postgres + RLS<br/>規則・狀態・通知紀錄")]
+    db[("Postgres + RLS<br/>規則・狀態・通知紀錄<br/>最後檢查（check_status）")]
     fn["Edge Functions<br/>unsubscribe・delete-account"]
     cron["pg_cron + pg_net<br/>Vault：GitHub token"]
   end
@@ -83,19 +83,21 @@ flowchart LR
   mega[("兆豐匯率 API")]
   gmail["Gmail SMTP"]
   hc["healthchecks.io"]
-  state[("state 分支<br/>走勢・最後檢查")]
+  state[("state 分支<br/>走勢（每天一檔）")]
   admin([維運者])
 
   user --> pages
   pages -- "登入" --> auth
   pages -- "讀寫自己的提醒" --> db
   pages -- "刪除帳號" --> fn
+  pages -- "讀最後檢查時間（公開）" --> db
   cron -- "每 :05、:35 workflow_dispatch" --> check
   check -- "抓匯率" --> mega
   check -- "讀規則、寫狀態（secret key）" --> db
   check -- "寄信（含退訂連結）" --> gmail
-  check -- "commit 走勢" --> state
-  check -- "部署公開版 data.json" --> pages
+  check -- "寫最後檢查時間（每次）" --> db
+  check -- "commit 走勢（有變才 commit）" --> state
+  check -- "部署公開版 data.json（有變才部署）" --> pages
   check -- "ping" --> hc
   gmail -. "退訂連結" .-> fn
   keep -- "讀公開幣別清單" --> db
@@ -108,7 +110,7 @@ flowchart LR
 |---|---|---|
 | **Supabase pg_cron**（主要） | 平日 09:05–15:35 每 :05、:35，以及 16:05 | `private.dispatch_check_rates()` 經 pg_net 呼叫 GitHub API，觸發 `check-rates`（`source=pg_cron`、`force=false`） |
 | GitHub `schedule`（備援） | 平日 09:07–15:37 每 :07、:37，以及 16:07 | GitHub 的排程常延遲或被丟掉，所以只當備援 |
-| `check-rates` 的 **gate** | 每次開始時 | 自動觸發且 20 分鐘內已成功檢查過 → 略過（不檢查、不 ping、不部署，仍是綠燈）；手動執行一律檢查 |
+| `check-rates` 的 **gate** | 每次開始時 | 自動觸發且 20 分鐘內已成功檢查過 → 略過（不檢查、不 ping、不部署，仍是綠燈）；手動執行一律檢查。上次檢查的時間讀 Supabase 的 `check_status`，讀不到才用 `state` 分支的 `last_check.json` |
 | 檢查時段 | 09:00–16:30 | 時段外程式會略過（`config.yaml` 的 `business_hours`） |
 | **healthchecks.io** | — | 每次真的檢查成功就 ping；約 1 小時沒收到 → 寄信給維運者 |
 | `keepalive` | 每週日 12:23 | 用 publishable key 讀一次公開幣別清單，避免 Supabase 免費專案因閒置暫停 |
@@ -119,7 +121,7 @@ pg_cron 的排程寫在 `supabase/migrations/20261110020000_dispatch_check_rates
 
 | Workflow | 觸發 | 做什麼 |
 |---|---|---|
-| `check-rates` | pg_cron、GitHub schedule、手動 | gate（去重）→ check（抓匯率、判斷、寄信、寫回狀態、commit 走勢、ping 監控）→ deploy |
+| `check-rates` | pg_cron、GitHub schedule、手動 | gate（去重）→ check（抓匯率、判斷、寄信、寫回狀態、寫 `check_status`、ping 監控）→ 資料有變才 commit 走勢和 deploy（見下方〈什麼時候 commit、部署〉） |
 | `deploy-pages` | push 前端／設定到 main、被 check-rates 呼叫、手動 | 產生 `config.js`、`data.json`（`AUTH_ENABLED=true` 時是不含個人設定的公開版）→ 防外洩檢查 → 部署 |
 | `ci` | push、PR | validate-config＋防外洩、ruff、pytest、前端測試、Deno（Edge Functions）、資料庫 RLS 測試（真正的 Supabase） |
 | `staging-check` | 手動、staging 的 pg_cron | 用 staging 的 Supabase 跑一次（預設只讀；勾 `send` 才真的寄信） |
@@ -213,6 +215,20 @@ Vault 一律在後台頁面新增，**不要**用 SQL Editor 執行 `vault.creat
 
 更換步驟見〈[定期維護](#定期維護)〉。
 
+### 什麼時候 commit、部署
+
+每次檢查都會把結果（時間、成功與否、錯誤數量）寫到 Supabase 的 `check_status`，網頁頂端的狀態列直接讀它。
+所以 `state` 分支和 GitHub Pages 只在需要時才更新（`src/fx_alert/publish.py`）：
+
+| 這次檢查 | commit `state` 分支 | 部署網頁 |
+|---|---|---|
+| 記到新的牌告（走勢有變）、或走勢檔案格式轉換 | ✓ | ✓ |
+| 成功 ↔ 失敗（壞掉、恢復） | ✓ | ✓ |
+| 只有最後檢查時間改變（牌告沒更新） | — | — |
+
+**Supabase 讀不到時（例如專案被暫停）**：公開頁面照常顯示，狀態列改用 `data.json` 的產生時間（不會顯示錯誤或留白）；
+gate 改用 `state` 分支的 `last_check.json`（可能比較舊 → 照常檢查）。
+
 ## 資料存放
 
 | 位置 | 內容 | 公開？ |
@@ -220,8 +236,9 @@ Vault 一律在後台頁面新增，**不要**用 SQL Editor 執行 `vault.creat
 | Supabase `profiles` | 每人的 Email、Email 通知開關 | 否（RLS：只看得到自己） |
 | Supabase `alert_rules` | 每人每幣別的目標價、buffer、狀態 | 否 |
 | Supabase `notifications` | 通知紀錄 | 否 |
-| `state` 分支 `history/YYYY-MM.csv` | 匯率走勢（`quoted_at,currency,cash_sell`） | 是 |
-| `state` 分支 `last_check.json` | 最後一次檢查的時間、是否成功、錯誤**數量**（gate 也用它去重） | 是 |
+| Supabase `check_status` | 最後一次檢查的時間、是否成功、錯誤**數量**（只有一列；網頁狀態列、gate 讀它） | 是（任何人可讀，只有 secret key 能寫） |
+| `state` 分支 `history/YYYY-MM-DD.csv` | 匯率走勢（`quoted_at,currency,cash_sell`），每天一檔（台灣日期）。舊的每月一檔（`YYYY-MM.csv`）照樣讀得到，下一次檢查時會自動拆成每天一檔 | 是 |
+| `state` 分支 `last_check.json` | 和 `check_status` 一樣的內容，但只在資料有變時才 commit（Supabase 讀不到時的備援） | 是 |
 | `state` 分支 `state.json`、`alerts.csv` | 單人版時期的狀態與通知紀錄；多人版不再更新，只在退回單人版時使用 | 是 |
 | 網站 `data.json` | 公開行情（不含任何人的目標價、狀態、通知紀錄） | 是 |
 
@@ -331,7 +348,8 @@ GitHub Actions 的 `schedule` 是「盡力而為」：官方文件寫明負載�
    - **綠的但 check 被略過**：看 gate 的 **Decide**，「N 分鐘前已經成功檢查過，略過這次」是正常的去重。
    - **綠的、有 check，但寫「不在檢查時段內」**：觸發得太晚（例如 GitHub 排程延遲好幾小時），屬於正常略過。
 4. **補救**：Actions → `check-rates` → **Run workflow**（`force` 保持勾選、`source` 保持 manual）立刻補跑一次。
-5. **確認恢復**：`state` 分支出現新的 `data: … 台灣時間` commit，healthchecks.io 回到 **up**。
+5. **確認恢復**：healthchecks.io 回到 **up**；正式專案的 `check_status`（Table Editor）時間是最新的。
+   `state` 分支只在牌告有更新時才 commit，沒有新 commit 不一定代表沒檢查。
 
 ## 本機開發
 
@@ -430,7 +448,9 @@ migration 放在 `supabase/migrations/`，檔名 `<14 位數字版本號>_<名�
 ## 退回單人版
 
 步驟見 [`docs/multi-user.md`](docs/multi-user.md) 的「D. 退回方案」：停用排程、刪掉 Variable `AUTH_ENABLED`、
-用 `python -m fx_alert export-state` 把資料庫裡的狀態寫回 `state` 分支、revert 切換的 PR。
+用 `python -m fx_alert export-state` 把資料庫裡的狀態寫回 `state` 分支、把 `check-rates` 改回單人模式。
+
+走勢檔案（每天一檔）單人版、多人版共用同一份程式，退回時不需要轉換；`export-state` 只寫 `state.json` 和 `alerts.csv`。
 
 ## 專案結構
 

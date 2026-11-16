@@ -582,6 +582,7 @@ def test_supabase_store_deleted_rule_end_to_end(tmp_path):
         FakeResponse(200, [], headers={"Content-Range": "*/0"}),  # count_sent_since
         FakeResponse(body=None),  # record_alert #1 → null（帳號已刪除）
         FakeResponse(body=42),  # record_alert #2
+        FakeResponse(201, None),  # record_check
     )
     store = SupabaseStore(SupabaseConfig(URL, KEY), session=session)
     n = DryRunNotifier(out=io.StringIO())
@@ -599,3 +600,50 @@ def test_supabase_store_deleted_rule_end_to_end(tmp_path):
     assert r.notified == ["JPY 規則#1", "JPY 規則#2"]
     assert any("規則#1: 規則已不存在" in line for line in logs)
     assert r.state_changed is True
+
+
+# ---------- 檢查狀態（check_status） ----------
+
+
+def test_record_check_upserts_single_public_row():
+    store, session = sb(FakeResponse(201, None))
+    store.record_check(NOW, ok=False, errors=2)
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/rest/v1/check_status")
+    assert call["params"] == {"on_conflict": "id"}
+    assert "resolution=merge-duplicates" in call["headers"]["Prefer"]
+    body = call["json"]
+    assert body["id"] == 1 and body["ok"] is False and body["errors"] == 2
+    assert set(body) == {"id", "checked_at", "ok", "errors", "updated_at"}  # 沒有錯誤訊息
+
+
+def test_check_status_failure_is_only_a_note(tmp_path):
+    """check_status 寫不進去（例如 migration 還沒套用）：照樣成功，只記一行注意。"""
+    session = FakeSession(
+        FakeResponse(body=[]),  # load_watches
+        FakeResponse(200, [], headers={"Content-Range": "*/0"}),  # count_sent_since
+        FakeResponse(404, {"message": "relation public.check_status does not exist"}),
+    )
+    store = SupabaseStore(SupabaseConfig(URL, KEY), session=session)
+    logs = []
+    r = main_mod.run_check(
+        make_cfg(tmp_path),
+        DryRunNotifier(out=io.StringIO()),
+        EMAIL,
+        now=NOW,
+        fetch=lambda: mega_json(),
+        log=logs.append,
+        store=store,
+    )
+    assert r.exit_code == 0 and r.errors == []
+    assert any(line.startswith("注意：檢查狀態沒有寫到 Supabase") for line in logs)
+    assert any(tmp_path.rglob("last_check.json"))  # 網頁的退回方案照樣有時間可用
+
+
+def test_dry_run_does_not_write_check_status():
+    logs = []
+    inner, session = sb()
+    ReadOnlyStore(inner, log=logs.append).record_check(NOW, ok=True, errors=0)
+    assert session.calls == []
+    assert logs == ["[dry-run] 不寫入檢查狀態（ok=True、錯誤 0 個）"]

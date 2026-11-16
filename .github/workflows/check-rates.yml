@@ -1,6 +1,7 @@
 # 定時檢查匯率，到價就寄信（多人版）：
 #   * 規則、狀態、通知紀錄在 Supabase（每個人自己的目標價，寄到自己的信箱）
-#   * 公開的匯率走勢、最後檢查時間存在 state 分支，然後更新 GitHub Pages 上的頁面
+#   * 最後一次檢查的結果寫到 Supabase 的 check_status（每次都寫；網頁狀態列和 gate 讀它）
+#   * 公開的匯率走勢存在 state 分支（每天一檔）；只有資料有變時才 commit、更新 GitHub Pages
 # 退回單人版：Revert 切換的 PR（chore/cutover），見 docs/multi-user.md 的退回方案。
 name: check-rates
 
@@ -38,6 +39,8 @@ jobs:
   # 去重：自動觸發有兩個來源（Supabase pg_cron 每 :05/:35 為主、GitHub schedule 每 :07/:37 備援）。
   # 20 分鐘內已經成功檢查過就 run=false：check、deploy 都會被略過（不檢查、不 ping 監控、不部署），
   # workflow 仍然是綠燈。手動執行一律檢查。判斷失敗時照常檢查（check 的條件是 run != 'false'）。
+  # 上次檢查的結果先讀 Supabase 的 check_status（publishable key，和網頁一樣是公開資訊），
+  # 讀不到才用 state 分支的 last_check.json（它現在只在資料有變時更新，可能比較舊 → 照常檢查）。
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -74,6 +77,8 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           SOURCE: ${{ inputs.source }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
         run: |
           PYTHONPATH=src python3 -m fx_alert.gate \
             --last-check "$RUNNER_TEMP/last_check.json" --event "$EVENT" --source "$SOURCE" \
@@ -86,6 +91,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       config_ok: ${{ steps.validate.outputs.ok }}
+      published: ${{ steps.commit.outputs.published }}
     steps:
       - uses: actions/checkout@v4
 
@@ -150,17 +156,22 @@ jobs:
           fi
           echo "沒有發現 email"
 
+      # 只有走勢、狀態、通知紀錄有變，或檢查從成功變失敗（或恢復）時才 commit 和部署；
+      # 只有 last_check.json 的時間變了就不 commit（最後檢查時間已經寫到 Supabase）。見 publish.py
       - name: Commit data to state branch
         if: ${{ !inputs.dry_run }}
         working-directory: data
+        id: commit
         run: |
           git add -A
-          if git diff --cached --quiet; then
-            echo "沒有任何變更（例如不在檢查時段內），不 commit"
+          publish=$(PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m fx_alert.publish || echo true)
+          if [ "$publish" != "true" ]; then
+            echo "published=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git commit -m "data: $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M') 台灣時間"
           git push origin state
+          echo "published=true" >> "$GITHUB_OUTPUT"
 
       - name: Fail if check reported errors
         if: steps.check.outputs.exit_code != '0'
@@ -202,11 +213,13 @@ jobs:
             && echo "已通知監控：檢查失敗" \
             || echo "::warning::監控 ping 失敗"
 
-  # 檢查完就更新頁面。就算這次抓匯率失敗也要部署，頁面才會顯示「有錯誤」；
-  # 但設定檔不合法、或是 dry-run 時不部署。
+  # state 分支有新的 commit 才更新頁面（publish.py 已經把「檢查失敗／恢復」也算進去，
+  # 頁面才會顯示「有錯誤」）。設定檔不合法、dry-run、或只有最後檢查時間改變時不部署。
   deploy:
     needs: check
-    if: ${{ !cancelled() && needs.check.outputs.config_ok == 'true' && !inputs.dry_run }}
+    if: >-
+      ${{ !cancelled() && needs.check.outputs.config_ok == 'true' && !inputs.dry_run
+      && needs.check.outputs.published == 'true' }}
     permissions:
       contents: read
       pages: write

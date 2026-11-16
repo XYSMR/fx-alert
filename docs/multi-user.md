@@ -196,7 +196,28 @@ python -m fx_alert migrate-me --email <你的 Gmail> --data-dir <state 分支的
    - 只處理 `config.yaml` 裡的幣別；網頁上多設的幣別、網頁上改過的目標價只會提醒（以 `config.yaml` 為準）
    - 資料庫沒轉換過狀態的幣別保留檔案原本的內容；通知依「時間到秒、幣別、匯率、目標價」去重，執行幾次結果都一樣
    - **不要用切換前的備份覆蓋**：多人版已經寄過的通知可能再寄一次。備份只在 `export-state` 失敗時用，並接受可能重複寄信
-3. Revert `chore/cutover` PR；`MAIL_TO` 已經刪了就加回
+3. 把 `check-rates` 改回單人模式（開一個 PR）；`MAIL_TO` 已經刪了就加回。
+   **不要直接 revert `chore/cutover` PR**：之後的 PR（幣別、網頁、部署）改過同樣的檔案，2026-11-16 實測 revert 會在
+   `deploy-pages.yml`、`build_site.py` 等 5 個檔案衝突。只需要改 `.github/workflows/check-rates.yml` 的 **Check rates** 這一步：
+   ```yaml
+         - name: Check rates
+           id: check
+           env:
+             SMTP_USER: ${{ secrets.SMTP_USER }}
+             SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+             MAIL_TO: ${{ secrets.MAIL_TO }}
+             FORCE: ${{ inputs.force && '--force' || '' }}
+             DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+           run: |
+             set +e
+             python -m fx_alert check $FORCE $DRY_RUN
+             code=$?
+             echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+             exit 0
+   ```
+   其他步驟不用動：gate 讀不到 `check_status` 會用 `last_check.json`；單人版不寫 `check_status`，
+   commit／部署的判斷（`publish.py`）在檢查成功↔失敗時一定會 commit，頁面照樣看得到錯誤。
+   走勢檔案（每天一檔，舊的每月一檔也讀得到）兩種模式共用同一份程式，**不需要轉換**。
 4. Enable check-rates → 手動 Run 一次（建議先 dry_run）。正式專案的資料不刪，下次切換用 `--replace`
 
 ### 待辦（第 8 步之後）

@@ -18,10 +18,10 @@
   "edit_config_url": "https://github.com/XYSMR/fx-alert/edit/main/config.yaml",
   "actions_url": "https://github.com/XYSMR/fx-alert/actions/workflows/check-rates.yml",
   "business_hours": {
-    "weekdays_only": true,
-    "start": "09:00",
-    "end": "16:30",
-    "first_check": "09:05",
+    "weekdays_only": false,
+    "start": "00:00",
+    "end": "23:59",
+    "first_check": "00:05",
     "interval_minutes": 30
   },
   "currencies": [
@@ -41,6 +41,12 @@
         "rate": "32.7109",
         "at": "2026-10-21T09:05:00+08:00"
       },
+      "recent": {
+        "days": 19,
+        "lower": 19,
+        "since": "2026-10-11",
+        "enough": true
+      },
       "history_url": "waiting/USD.json"
     },
     {
@@ -58,6 +64,12 @@
       "low": {
         "rate": "4.1869",
         "at": "2026-10-16T13:35:00+08:00"
+      },
+      "recent": {
+        "days": 19,
+        "lower": 19,
+        "since": "2026-10-11",
+        "enough": true
       },
       "history_url": "waiting/HKD.json"
     },
@@ -77,6 +89,12 @@
         "rate": "44.2827",
         "at": "2026-11-04T13:35:00+08:00"
       },
+      "recent": {
+        "days": 19,
+        "lower": 13,
+        "since": "2026-10-11",
+        "enough": true
+      },
       "history_url": "waiting/GBP.json"
     },
     {
@@ -94,6 +112,12 @@
       "low": {
         "rate": "0.2067",
         "at": "2026-11-06T13:35:00+08:00"
+      },
+      "recent": {
+        "days": 19,
+        "lower": 18,
+        "since": "2026-10-11",
+        "enough": true
       },
       "target": "0.2050",
       "buffer": "0.0010",
@@ -119,6 +143,12 @@
         "rate": "22.6908",
         "at": "2026-11-02T09:05:00+08:00"
       },
+      "recent": {
+        "days": 19,
+        "lower": 1,
+        "since": "2026-10-11",
+        "enough": true
+      },
       "history_url": "waiting/AUD.json"
     },
     {
@@ -136,6 +166,12 @@
       "low": {
         "rate": "23.4036",
         "at": "2026-10-28T13:35:00+08:00"
+      },
+      "recent": {
+        "days": 19,
+        "lower": 5,
+        "since": "2026-10-11",
+        "enough": true
       },
       "history_url": "waiting/CAD.json"
     },
@@ -155,6 +191,12 @@
         "rate": "25.6311",
         "at": "2026-10-26T09:05:00+08:00"
       },
+      "recent": {
+        "days": 19,
+        "lower": 15,
+        "since": "2026-10-11",
+        "enough": true
+      },
       "history_url": "waiting/SGD.json"
     },
     {
@@ -172,6 +214,12 @@
       "low": {
         "rate": "39.9465",
         "at": "2026-10-21T13:35:00+08:00"
+      },
+      "recent": {
+        "days": 19,
+        "lower": 18,
+        "since": "2026-10-11",
+        "enough": true
       },
       "history_url": "waiting/CHF.json"
     },
@@ -191,6 +239,12 @@
         "rate": "1.0266",
         "at": "2026-10-19T09:05:00+08:00"
       },
+      "recent": {
+        "days": 19,
+        "lower": 19,
+        "since": "2026-10-11",
+        "enough": true
+      },
       "history_url": "waiting/THB.json"
     },
     {
@@ -208,6 +262,12 @@
       "low": {
         "rate": "18.4437",
         "at": "2026-10-14T13:35:00+08:00"
+      },
+      "recent": {
+        "days": 19,
+        "lower": 6,
+        "since": "2026-10-11",
+        "enough": true
       },
       "history_url": "waiting/NZD.json"
     },
@@ -227,6 +287,12 @@
         "rate": "36.6696",
         "at": "2026-10-12T09:05:00+08:00"
       },
+      "recent": {
+        "days": 19,
+        "lower": 4,
+        "since": "2026-10-11",
+        "enough": true
+      },
       "history_url": "waiting/EUR.json"
     },
     {
@@ -244,6 +310,12 @@
       "low": {
         "rate": "0.0262",
         "at": "2026-11-02T13:35:00+08:00"
+      },
+      "recent": {
+        "days": 19,
+        "lower": 8,
+        "since": "2026-10-11",
+        "enough": true
       },
       "target": "0.0245",
       "buffer": "0.0002",
@@ -269,6 +341,12 @@
         "rate": "8.5836",
         "at": "2026-10-29T09:05:00+08:00"
       },
+      "recent": {
+        "days": 19,
+        "lower": 11,
+        "since": "2026-10-11",
+        "enough": true
+      },
       "history_url": "waiting/MYR.json"
     },
     {
@@ -286,6 +364,12 @@
       "low": {
         "rate": "0.0021",
         "at": "2026-10-12T09:05:00+08:00"
+      },
+      "recent": {
+        "days": 19,
+        "lower": 0,
+        "since": "2026-10-11",
+        "enough": true
       },
       "history_url": "waiting/IDR.json"
     },
@@ -305,6 +389,12 @@
         "rate": "0.5762",
         "at": "2026-10-22T09:05:00+08:00"
       },
+      "recent": {
+        "days": 19,
+        "lower": 19,
+        "since": "2026-10-11",
+        "enough": true
+      },
       "history_url": "waiting/PHP.json"
     },
     {
@@ -322,6 +412,12 @@
       "low": {
         "rate": "4.2987",
         "at": "2026-10-19T13:35:00+08:00"
+      },
+      "recent": {
+        "days": 19,
+        "lower": 19,
+        "since": "2026-10-11",
+        "enough": true
       },
       "history_url": "waiting/MOP.json"
     },
@@ -341,6 +437,12 @@
         "rate": "0.0015",
         "at": "2026-10-12T09:05:00+08:00"
       },
+      "recent": {
+        "days": 19,
+        "lower": 0,
+        "since": "2026-10-11",
+        "enough": true
+      },
       "history_url": "waiting/VND.json"
     },
     {
@@ -358,6 +460,12 @@
       "low": {
         "rate": "4.9292",
         "at": "2026-11-03T13:35:00+08:00"
+      },
+      "recent": {
+        "days": 19,
+        "lower": 10,
+        "since": "2026-10-11",
+        "enough": true
       },
       "history_url": "waiting/CNY.json"
     }

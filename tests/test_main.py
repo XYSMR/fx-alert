@@ -435,10 +435,16 @@ class _FrozenSaturday(datetime):
         return SATURDAY.astimezone(tz) if tz else SATURDAY
 
 
-def _cli_check(tmp_path, monkeypatch, *extra):
-    (tmp_path / "config.yaml").write_text(
-        (ROOT / "config.yaml").read_text(encoding="utf-8"), encoding="utf-8"
-    )
+WEEKDAY_HOURS = 'business_hours:\n  weekdays_only: true\n  start: "09:00"\n  end: "16:30"\n'
+
+
+def _cli_check(tmp_path, monkeypatch, *extra, weekdays_only=False):
+    text = (ROOT / "config.yaml").read_text(encoding="utf-8")
+    if weekdays_only:
+        # repo 的 config.yaml 是 24 小時；「時段外」的情況用只有平日白天的設定測
+        head, _, rest = text.partition("business_hours:\n")
+        text = head + WEEKDAY_HOURS + rest.split("\n", 4)[4]
+    (tmp_path / "config.yaml").write_text(text, encoding="utf-8")
     out_file = tmp_path / "gh_output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out_file))
     for k in ("SMTP_USER", "SMTP_PASSWORD", "MAIL_TO"):
@@ -456,7 +462,7 @@ def test_cli_outside_hours_reports_skipped(tmp_path, monkeypatch):
         raise AssertionError("時段外不應該抓匯率")
 
     monkeypatch.setattr(main_mod, "fetch_rates_json", must_not_fetch)
-    code, out = _cli_check(tmp_path, monkeypatch)
+    code, out = _cli_check(tmp_path, monkeypatch, weekdays_only=True)
     assert code == 0
     assert out == {"skipped": "true", "state_changed": "false"}
 
@@ -464,7 +470,7 @@ def test_cli_outside_hours_reports_skipped(tmp_path, monkeypatch):
 def test_cli_force_outside_hours_is_not_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(main_mod, "datetime", _FrozenSaturday)
     monkeypatch.setattr(main_mod, "fetch_rates_json", lambda: mega_json(jpy="0.2100"))
-    code, out = _cli_check(tmp_path, monkeypatch, "--force")
+    code, out = _cli_check(tmp_path, monkeypatch, "--force", weekdays_only=True)
     assert code == 0
     assert out["skipped"] == "false"
 
@@ -554,3 +560,12 @@ def test_single_mode_still_records_only_config_currencies(tmp_path):
     cfg = make_cfg(tmp_path)
     check(cfg, DryRunNotifier(), fetch=full_board)
     assert {q.currency for q in read_quotes(cfg.data_dir, SINCE)} == {"JPY", "KRW"}
+
+
+def test_repo_config_checks_24h_including_weekends(tmp_path, monkeypatch):
+    """repo 的 config.yaml：週六凌晨也會檢查（第 6 步：24 小時、含週末）。"""
+    monkeypatch.setattr(main_mod, "datetime", _FrozenSaturday)
+    monkeypatch.setattr(main_mod, "fetch_rates_json", lambda: mega_json(jpy="0.2100"))
+    code, out = _cli_check(tmp_path, monkeypatch)
+    assert code == 0
+    assert out["skipped"] == "false"

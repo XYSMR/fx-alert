@@ -293,7 +293,9 @@ function homeRows(list) {
  */
 function isStale(lastCheck, hours, now = new Date()) {
   if (!hours || !inCheckHours(hours, now)) return false;
-  const sinceOpen = taipeiParts(now).minutes - toMinutes(hours.start);
+  // 24 小時檢查（00:00–23:59）沒有「剛開始檢查」的寬限：半夜 00:30 也要看上一次檢查是什麼時候
+  const allDay = toMinutes(hours.start) === 0 && toMinutes(hours.end) >= 23 * 60 + 59;
+  const sinceOpen = allDay ? Infinity : taipeiParts(now).minutes - toMinutes(hours.start);
   const sinceCheck = lastCheck ? (now - new Date(lastCheck.at)) / 60000 : Infinity;
   return Math.min(sinceOpen, sinceCheck) > STALE_AFTER_MINUTES;
 }

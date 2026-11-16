@@ -13,8 +13,12 @@ union all
 select 'function private.dispatch_check_rates()',
        to_regprocedure('private.dispatch_check_rates()') is not null
 union all
-select 'cron job fx-alert-dispatch（5,35 1-7 * * 1-5）',
+select 'cron job fx-alert-dispatch',
        exists (select 1 from cron.job where jobname = 'fx-alert-dispatch')
 union all
-select 'cron job fx-alert-dispatch-1605（5 8 * * 1-5）',
+-- 20261116153000（24 小時）會把 16:05 的工作併進 fx-alert-dispatch（'5,35 * * * *'）並刪掉它：
+-- 兩種情況都代表這個版本確實套用過
+select 'cron job fx-alert-dispatch-1605（或已併入 24 小時排程）',
        exists (select 1 from cron.job where jobname = 'fx-alert-dispatch-1605')
+       or exists (select 1 from cron.job
+                  where jobname = 'fx-alert-dispatch' and schedule = '5,35 * * * *')

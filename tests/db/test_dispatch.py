@@ -108,10 +108,7 @@ def test_cron_jobs_use_utc_schedule_and_no_secret(db):
             "order by jobname"
         )
     )
-    # UTC：台灣平日 09:05–15:35 每 30 分鐘，以及 16:05
-    assert jobs == {
-        "5,35 1-7 * * 1-5": "select private.dispatch_check_rates()",
-        "5 8 * * 1-5": "select private.dispatch_check_rates()",
-    }
+    # 每天 24 小時，每 30 分鐘（20261116153000；原本平日 09:05–16:05 的兩個工作合併成一個）
+    assert jobs == {"5,35 * * * *": "select private.dispatch_check_rates()"}
     for command in jobs.values():
         assert "Bearer" not in command and "github_pat" not in command

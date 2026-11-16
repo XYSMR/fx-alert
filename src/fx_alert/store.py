@@ -32,6 +32,7 @@ import requests
 
 from fx_alert.config import AppConfig
 from fx_alert.history import append_alert, read_alerts
+from fx_alert.notify_window import NotifyWindow, parse_window
 from fx_alert.rules import AlertState, Rule
 from fx_alert.state_store import (
     StateError,
@@ -59,6 +60,7 @@ class Watch:
     state_target: Decimal | None  # 進入目前狀態時的目標價；給 rules.decide 判斷「改過目標價」
     recipients: tuple[str, ...] = field(repr=False)
     user_id: str | None = None  # 多人版才有；用來產生退訂連結
+    window: NotifyWindow | None = None  # 通知時段（多人版）；None = 全天
 
 
 class RuleStore(Protocol):
@@ -159,6 +161,9 @@ _RULE_COLUMNS = ",".join(
         "email",
     ]
 )
+# 通知時段（migration 20261116142000）。程式比 migration 早上線時（等核准），
+# 資料庫還沒有這兩欄 → load_watches 改用上面的欄位、時段當作全天
+_WINDOW_COLUMNS = "notify_start::text,notify_end::text"
 
 
 @dataclass(frozen=True)
@@ -207,9 +212,25 @@ class SupabaseStore:
 
     # ---- RuleStore ----
 
+    #: 這次讀規則時，資料庫有沒有通知時段欄位（main 用來提醒「migration 還沒套用」）
+    window_supported: bool = True
+
     def load_watches(self) -> list[Watch]:
         # active_rules 已經排除停用的規則和關閉 Email 的人（見 supabase/migrations）
-        resp = self._request("GET", "active_rules", params={"select": _RULE_COLUMNS, "order": "id"})
+        try:
+            resp = self._request(
+                "GET",
+                "active_rules",
+                params={"select": f"{_RULE_COLUMNS},{_WINDOW_COLUMNS}", "order": "id"},
+            )
+            self.window_supported = True
+        except StoreError as exc:
+            if "notify_start" not in str(exc) and "notify_end" not in str(exc):
+                raise
+            resp = self._request(
+                "GET", "active_rules", params={"select": _RULE_COLUMNS, "order": "id"}
+            )
+            self.window_supported = False
         try:
             rows = resp.json()
             return [_row_to_watch(row) for row in rows]
@@ -306,6 +327,10 @@ class ReadOnlyStore:
     def load_watches(self) -> list[Watch]:
         return self._inner.load_watches()
 
+    @property
+    def window_supported(self) -> bool:
+        return getattr(self._inner, "window_supported", True)
+
     def count_sent_since(self, since: datetime) -> int:
         return self._inner.count_sent_since(since)
 
@@ -339,6 +364,7 @@ def _row_to_watch(row: dict) -> Watch:
         state_target=None if state_target is None else _dec(state_target),
         recipients=(row["email"],),
         user_id=row["user_id"],
+        window=parse_window(row.get("notify_start"), row.get("notify_end")),
     )
 
 

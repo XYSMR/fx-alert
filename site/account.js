@@ -188,19 +188,72 @@ function distancePct(rate, targetMicros) {
   return Math.round(pct * 1000) / 1000;
 }
 
+// ---------- 通知時段（台灣時間） ----------
+
+const DEFAULT_WINDOW = { start: "08:00", end: "22:00" };
+
+/** 下拉選單的選項：00:00、00:30 … 23:30（檢查每 30 分鐘一次，只能選整點或半點） */
+function windowOptions() {
+  const out = [];
+  for (let m = 0; m < 24 * 60; m += 30) {
+    out.push(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
+  }
+  return out;
+}
+
+/** profiles 的 notify_start / notify_end（"08:00:00"）→ { start: "08:00", end: "22:00" }；沒有欄位就是預設值 */
+function notifyWindow(profile) {
+  const cut = (t) => (typeof t === "string" && /^\d{2}:\d{2}/.test(t) ? t.slice(0, 5) : null);
+  const start = cut(profile && profile.notify_start);
+  const end = cut(profile && profile.notify_end);
+  return start && end ? { start, end } : { ...DEFAULT_WINDOW };
+}
+
+/** 「08:00–22:00」、「22:00–隔天 07:00」或「全天」 */
+function windowLabel(w) {
+  if (w.start === w.end) return "全天";
+  return w.start < w.end ? `${w.start}–${w.end}` : `${w.start}–隔天 ${w.end}`;
+}
+
+/** 台灣時間的「HH:MM」 */
+function taipeiHHMM(date) {
+  const d = new Date(date.getTime() + 8 * 3600 * 1000);
+  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+}
+
+/** now 在不在通知時段內（和 Python 的 notify_window.py 一樣：含開始、不含結束；開始=結束是全天） */
+function inWindow(w, now) {
+  if (w.start === w.end) return true;
+  const t = taipeiHHMM(now);
+  return w.start < w.end ? w.start <= t && t < w.end : t >= w.start || t < w.end;
+}
+
+/**
+ * 已到價、但現在不在通知時段：卡片上的說明。在時段內或全天回傳 null。
+ * 規則照常是「等待中」；時段開始後的第一次檢查會重新判斷（那時還在目標以下才寄）。
+ */
+function windowNote(w, now) {
+  if (inWindow(w, now)) return null;
+  return `已達到目標，但現在不在你的通知時段（台灣時間 ${windowLabel(w)}）。` +
+    `${w.start} 之後的第一次檢查會再判斷一次，那時還在目標以下才寄 Email`;
+}
+
 /**
  * 公開行情 + 我的規則 → 卡片要的資料（和單人版 data.json 的欄位一樣，cardView 直接用）。
  * profile.email_enabled 為 false 時，所有卡片都顯示「通知已關閉」。
  */
-function personalCurrencies(publicList, rules, profile) {
+function personalCurrencies(publicList, rules, profile, now = new Date()) {
   const byCode = Object.fromEntries(rules.map((r) => [r.currency, r]));
   const emailOff = profile && profile.email_enabled === false;
+  const note = windowNote(notifyWindow(profile), now);
   return publicList.map((c) => {
     const r = byCode[c.code];
     if (!r) return { ...c };
     const target = parseDec(r.target);
     const buffer = r.buffer === null ? null : parseDec(r.buffer);
     const rearm = target + effectiveBuffer(target, buffer);
+    const rate = parseDec(c.rate);
+    const reached = r.state !== "triggered" && rate !== null && rate <= target;
     return {
       ...c,
       target: formatPrice(target),
@@ -209,6 +262,7 @@ function personalCurrencies(publicList, rules, profile) {
       status: r.state === "triggered" ? "triggered" : "waiting",
       status_since: r.state_changed_at ?? null,
       paused: emailOff ? "email" : r.enabled === false ? "rule" : null,
+      notify_note: reached && note ? note : null,
     };
   });
 }
@@ -267,7 +321,8 @@ let config = null;
 let state = { session: null, profile: null, rules: [], notifications: [] };
 let publicList = [];
 let notify = () => {};
-let viewing = null; // 上方下拉選單正在看的幣別（app.js 的 fx:selected）
+let viewing = null;
+let windowSupported = true; // 資料庫有沒有通知時段欄位（migration 還沒套用時是 false） // 上方下拉選單正在看的幣別（app.js 的 fx:selected）
 
 const byId = (id) => document.getElementById(id);
 
@@ -360,8 +415,8 @@ async function logout() {
 // ---------- 讀資料 ----------
 
 async function loadMine() {
-  const [p, r, n] = await Promise.all([
-    client.from("profiles").select("email_enabled").maybeSingle(),
+  const [p0, r, n] = await Promise.all([
+    client.from("profiles").select("email_enabled,notify_start,notify_end").maybeSingle(),
     client.from("alert_rules")
       .select("id,currency,target,buffer,effective_buffer,enabled,state,state_changed_at")
       .order("currency"),
@@ -370,6 +425,10 @@ async function loadMine() {
       .order("sent_at", { ascending: false })
       .limit(20),
   ]);
+  // 通知時段的 migration 還沒套用（欄位不存在）：只讀 email_enabled，時段用預設值、不能修改
+  let p = p0;
+  windowSupported = !(p0.error && p0.error.code === "42703");
+  if (!windowSupported) p = await client.from("profiles").select("email_enabled").maybeSingle();
   if (p.error || r.error || n.error) throw p.error || r.error || n.error;
   if (isAccountGone(p)) return false;
   state.profile = p.data;
@@ -433,6 +492,53 @@ function renderEmailSwitch() {
     h("span", { class: on ? "pill on" : "pill off" }, on ? "開啟" : "已關閉"),
     on ? null : h("p", { class: "hint" },
       "已關閉。重新開啟後，所有提醒會從「等待中」重新開始，不會補寄關閉期間的通知。"));
+}
+
+/** 通知時段設定：兩個下拉選單（台灣時間），改了就存 */
+function renderNotifyWindow() {
+  const w = notifyWindow(state.profile);
+  const opts = windowOptions();
+  const select = (id, value, label) => h("select", { id, "aria-label": label, disabled: !windowSupported },
+    ...opts.map((t) => h("option", { value: t, selected: t === value }, t)));
+  const start = select("notify-start", w.start, "通知時段開始（台灣時間）");
+  const end = select("notify-end", w.end, "通知時段結束（台灣時間）");
+  const summary = h("span", { class: "pill on", id: "notify-window-label" }, windowLabel(w));
+  const button = h("button", { type: "button", class: "primary", id: "notify-window-save", disabled: true }, "儲存時段");
+  // 改下拉選單只更新預覽；按「儲存時段」才寫入（避免改到一半就存成別的時段）
+  const preview = () => {
+    const next = { start: start.value, end: end.value };
+    summary.textContent = windowLabel(next);
+    button.disabled = !windowSupported || (next.start === w.start && next.end === w.end);
+  };
+  const save = async () => {
+    const next = { start: start.value, end: end.value };
+    start.disabled = end.disabled = button.disabled = true;
+    const { error } = await client.from("profiles")
+      .update({ notify_start: next.start, notify_end: next.end }).eq("user_id", state.session.user.id);
+    if (error) {
+      start.disabled = end.disabled = false;
+      start.value = w.start;
+      end.value = w.end;
+      preview();
+      return writeFailed(error);
+    }
+    say(`已更新通知時段：台灣時間 ${windowLabel(next)}`);
+    await refresh();
+  };
+  start.addEventListener("change", preview);
+  end.addEventListener("change", preview);
+  button.addEventListener("click", save);
+  return h("fieldset", { class: "notify-window" },
+    h("legend", {}, "通知時段（台灣時間）"),
+    h("div", { class: "window-row" },
+      h("label", { class: "field" }, h("span", {}, "從"), start),
+      h("label", { class: "field" }, h("span", {}, "到"), end),
+      summary,
+      button),
+    h("p", { class: "hint" },
+      "只在這段台灣時間內寄到價通知（不含結束時間）。到價時如果不在時段內，不會寄信，" +
+      "時段開始後的第一次檢查會再判斷一次：那時還在目標以下才寄，不會補寄。開始和結束選一樣 = 全天。"),
+    windowSupported ? null : h("p", { class: "hint" }, "通知時段即將開放設定，目前是預設的 08:00–22:00。"));
 }
 
 function ruleRow(rule) {
@@ -624,6 +730,7 @@ function renderRules() {
   const schedule = window.FxApp && window.FxApp.scheduleHint ? window.FxApp.scheduleHint() : "";
   byId("my-rules-body").replaceChildren(
     renderEmailSwitch(),
+    renderNotifyWindow(),
     schedule ? h("p", { class: "hint" }, schedule) : null,
     ...sortRules(state.rules, publicList).map(ruleRow),
     addForm(),
@@ -685,6 +792,7 @@ if (typeof module !== "undefined" && module.exports) {
     rearmQuote, rearmText,
     validateTarget, validateBuffer, farFromRateMessage, availableCurrencies, distancePct,
     addOptions, defaultAddCode, sortRules, suggestTarget, tickHint,
+    windowOptions, notifyWindow, windowLabel, inWindow, windowNote,
     personalCurrencies, ruleStatusText, errorMessage, normalizeConfirm, isConfirmed,
     isAccountGone, deleteErrorMessage, CONFIRM_TEXT,
   };

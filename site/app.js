@@ -194,7 +194,7 @@ function cardView(c) {
   } else if (!triggered) {
     view = c.distance_pct > 0
       ? { badge: "等待中", tone: "neutral", message: `還要再跌 ${formatPct(c.distance_pct)} 才會通知你` }
-      : { badge: "已到價", tone: "good", message: "已達到目標，下次檢查時會寄 Email 給你" };
+      : { badge: "已到價", tone: "good", message: c.notify_note || "已達到目標，下次檢查時會寄 Email 給你" };
   } else if (rate <= target) {
     view = { badge: "已到價", tone: "good", message: "✓ 已低於目標，Email 已寄出" };
   } else if (rate <= rearm) {

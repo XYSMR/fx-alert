@@ -68,6 +68,7 @@ class CheckResult:
     state_changed: bool = False
     notified: list[str] = field(default_factory=list)
     deferred: list[str] = field(default_factory=list)  # 超過每日上限，延到下次
+    outside_window: list[str] = field(default_factory=list)  # 已到價但不在通知時段，時段開始再判斷
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -139,6 +140,8 @@ def _check_rates(
 ) -> None:
     try:
         watches = store.load_watches()
+        if getattr(store, "window_supported", True) is False:
+            log("注意：資料庫還沒有通知時段欄位（migration 還沒套用），這次全部當作全天")
     except StoreError as exc:
         result.errors.append(str(exc))
         return  # 讀不到狀態就整個停下來，避免重複寄信
@@ -187,6 +190,15 @@ def _check_rates(
         )
 
         try:
+            if decision.notify and w.window and not w.window.contains(local_now):
+                # 不在通知時段：不寄、狀態不變（還是等待中）。時段開始後的第一次檢查會重新判斷，
+                # 那時匯率還在目標以下才寄；已經回升就繼續等待，不補寄
+                result.outside_window.append(w.label)
+                log(
+                    f"{w.label}: 已到價，但不在通知時段（台灣時間 {w.window.label()}），"
+                    "時段開始後重新判斷"
+                )
+                continue
             if decision.notify:
                 if remaining <= 0:
                     result.deferred.append(w.label)  # 狀態不更新，下次再試

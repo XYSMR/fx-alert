@@ -26,8 +26,9 @@ from pathlib import Path
 
 from fx_alert.config import TAIPEI
 from fx_alert.history import Quote, read_quotes
+from fx_alert.paths import repo_file
 
-SEED_PATH = Path(__file__).resolve().parents[2] / "seed" / "mega_daily_close.csv"
+SEED_PATH = repo_file("seed/mega_daily_close.csv")
 CLOSE_FROM = time(16, 0)
 CLOSE_UNTIL = time(16, 10, 59)
 WINDOW_DAYS = 30  # 「近 30 天」= 日曆天
@@ -39,8 +40,7 @@ Closes = dict[str, dict[date, Decimal]]
 def read_seed(path: Path = SEED_PATH) -> Closes:
     """seed/mega_daily_close.csv（date + 每個幣別一欄）→ {幣別: {日期: 收盤價}}。"""
     out: Closes = {}
-    if not path.exists():
-        return out
+    # 檔案不在就直接失敗：以前是回傳空的，部署時找不到檔案也不會發現（近 30 天只剩自己記錄的幾天）
     with open(path, encoding="utf-8", newline="") as f:
         for row in csv.DictReader(f):
             day = date.fromisoformat(row.pop("date"))

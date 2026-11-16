@@ -241,6 +241,9 @@ gate 改用 `state` 分支的 `last_check.json`（可能比較舊 → 照常檢�
 | Supabase `profiles` | 每人的 Email、Email 通知開關、通知時段（台灣時間） | 否（RLS：只看得到自己） |
 | Supabase `alert_rules` | 每人每幣別的目標價、buffer、狀態 | 否 |
 | Supabase `notifications` | 通知紀錄 | 否 |
+| Supabase `trips` | 出國換匯計畫的旅程：幣別、出發日、需要的外幣金額、名稱（每人最多 5 趟還沒出發的；出發日、幣別建立後不能改） | 否 |
+| Supabase `trip_exchanges` | 使用者自己記錄的「已經換了多少」（每趟最多 50 筆） | 否 |
+| Supabase `trip_notifications` | 換匯計畫寄過的提醒（種類、日期、當時價格和近 30 天第幾低）；一天最多一封、固定提醒每趟一次，資料庫會擋 | 否 |
 | Supabase `check_status` | 最後一次檢查的時間、是否成功、錯誤**數量**（只有一列；網頁狀態列、gate 讀它） | 是（任何人可讀，只有 secret key 能寫） |
 | `state` 分支 `history/YYYY-MM-DD.csv` | 匯率走勢（`quoted_at,currency,cash_sell`），每天一檔（台灣日期）。舊的每月一檔（`YYYY-MM.csv`）照樣讀得到，下一次檢查時會自動拆成每天一檔 | 是 |
 | `state` 分支 `last_check.json` | 和 `check_status` 一樣的內容，但只在資料有變時才 commit（Supabase 讀不到時的備援） | 是 |

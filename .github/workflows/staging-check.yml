@@ -45,6 +45,15 @@ jobs:
             exit 1
           fi
 
+      # 信裡的退訂連結能不能用：用一個不存在的帳號產生連結，POST 給 staging 的 Edge Function。
+      # 一致 → 200 no_account（什麼都不改）；不一致 → 403，這一步失敗、後面不寄信。
+      # 只印結果，不印連結、簽章或密鑰。
+      - name: Unsubscribe link check
+        env:
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          UNSUBSCRIBE_SECRET: ${{ secrets.STAGING_UNSUBSCRIBE_SECRET }}
+        run: python -m fx_alert unsubscribe-check
+
       - name: Multi-user check (dry-run, read-only)
         if: ${{ !inputs.send }}
         env:

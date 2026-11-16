@@ -439,6 +439,66 @@ def _cmd_unsubscribe_link(args) -> int:
     return 0
 
 
+# 驗證退訂連結用的 user_id：不會是任何人的帳號（UUID v4 格式，但隨機部分全是 0）
+UNSUBSCRIBE_PROBE_USER = "00000000-0000-4000-8000-000000000000"
+UNSUBSCRIBE_RESULTS = {
+    (200, "no_account"): (True, "通過：Edge Function 驗得過簽章（UNSUBSCRIBE_SECRET 兩邊一致）"),
+    (403, "invalid_link"): (
+        False,
+        "簽章不符：GitHub Secret 的 UNSUBSCRIBE_SECRET 和 Edge Function 的不一致，"
+        "信裡的退訂連結會失效",
+    ),
+    (500, "not_configured"): (
+        False,
+        "Edge Function 沒有設定 UNSUBSCRIBE_SECRET（或少於 32 個字元）",
+    ),
+    (500, "update_failed"): (
+        False,
+        "簽章一致，但 Edge Function 寫不進資料庫（檢查 Edge Function 的 FX_SECRET_KEY）",
+    ),
+}
+
+
+def check_unsubscribe(cfg: UnsubscribeConfig, post) -> tuple[bool, str]:
+    """用一個不存在的帳號產生退訂連結，POST 給 Edge Function：
+    簽章一致 → 200 no_account（沒有這個帳號，什麼都不改）；不一致 → 403 invalid_link。
+    不會退訂任何人。回傳（是否通過, 說明）；說明不含連結、簽章或密鑰。
+    """
+    url = cfg.links(UNSUBSCRIBE_PROBE_USER).one_click_url
+    try:
+        status, body = post(url)
+    except Exception as exc:  # noqa: BLE001  連不到也只回報類型
+        return False, f"連不到 Edge Function：{type(exc).__name__}"
+    key = (status, body.get("status") or body.get("error") if isinstance(body, dict) else None)
+    if key in UNSUBSCRIBE_RESULTS:
+        return UNSUBSCRIBE_RESULTS[key]
+    return False, f"Edge Function 回應 {status}（預期 200 no_account）"
+
+
+def _post_json(url: str) -> tuple[int, object]:
+    import requests
+
+    resp = requests.post(url, timeout=15)
+    try:
+        return resp.status_code, resp.json()
+    except ValueError:
+        return resp.status_code, None
+
+
+def _cmd_unsubscribe_check(args) -> int:
+    """確認 UNSUBSCRIBE_SECRET 和 Edge Function 一致（staging-check 每次都跑）。"""
+    try:
+        cfg = UnsubscribeConfig.from_env()
+    except UnsubscribeError as exc:
+        print(f"設定錯誤：{exc}", file=sys.stderr)
+        return 1
+    ok, message = check_unsubscribe(cfg, _post_json)
+    print(f"退訂連結驗證：{message}")
+    if not ok and os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::error::退訂連結驗證失敗：{message}")
+    return 0 if ok else 1
+
+
 def _cmd_migrate_me(args) -> int:
     """單人版 → 多人版：把 config.yaml、state.json、alerts.csv 搬到自己的帳號。"""
     from fx_alert.migrate import (
@@ -580,6 +640,12 @@ def main(argv: list[str] | None = None) -> int:
     unsub = sub.add_parser("unsubscribe-link", help="（本機測試用）印出某個使用者的退訂連結")
     unsub.add_argument("--user-id", required=True, help="Supabase 使用者的 UUID")
     unsub.set_defaults(func=_cmd_unsubscribe_link)
+
+    ucheck = sub.add_parser(
+        "unsubscribe-check",
+        help="確認 UNSUBSCRIBE_SECRET 和 Edge Function 一致（用不存在的帳號測，不會退訂任何人）",
+    )
+    ucheck.set_defaults(func=_cmd_unsubscribe_check)
 
     mig = sub.add_parser("migrate-me", help="（本機）把單人版的設定搬到自己的 Supabase 帳號")
     mig.add_argument("--email", required=True, help="你用來 Google 登入的 email")

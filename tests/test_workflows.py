@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+import yaml
+
 WF = Path(__file__).resolve().parents[1] / ".github/workflows"
 
 
@@ -157,49 +159,71 @@ def test_source_input_for_pg_cron():
     }
 
 
-# ---------- deploy-migrations：正式專案的 migration 部署 ----------
+# ---------- deploy-migrations：staging → 正式專案 ----------
 
 
-def test_deploy_migrations_needs_production_approval():
+def _deploy_jobs(wf: str) -> dict:
+    return yaml.safe_load(wf)["jobs"]
+
+
+def test_deploy_migrations_staging_first_then_production_with_approval():
     wf = read("deploy-migrations.yml")
-    assert "environment: production" in wf  # 必要審核者在 GitHub Environment 設定
-    assert "branches: [main]" in wf and "if: github.ref == 'refs/heads/main'" in wf
-    assert "workflow_dispatch:" in wf
+    jobs = _deploy_jobs(wf)
+    assert list(jobs) == ["staging", "production"]
+    assert jobs["staging"]["environment"] == "staging"  # 不需核准
+    assert jobs["production"]["environment"] == "production"  # 必要審核者在 GitHub Environment 設定
+    # 正式專案：staging 成功才會執行（if 沒有 always()/failure() → 預設 success()）
+    assert jobs["production"]["needs"] == "staging"
+    cond = jobs["production"]["if"]
+    assert "github.ref == 'refs/heads/main'" in cond
+    for fn in ("always()", "failure()", "cancelled()", "!cancelled()"):
+        assert fn not in cond
     assert "cancel-in-progress: false" in wf  # 不能中途取消一半的部署
     assert "permissions:\n  contents: read" in wf
 
 
+def test_deploy_migrations_manual_target_choice():
+    on = yaml.safe_load(read("deploy-migrations.yml"))[True]  # YAML 的 on 會被讀成 True
+    target = on["workflow_dispatch"]["inputs"]["target"]
+    assert target["type"] == "choice" and target["options"] == ["staging", "production"]
+    assert target["default"] == "staging"  # 預設不會碰正式專案
+
+
 def test_deploy_migrations_checks_before_writing():
-    """順序：比對 → 事前檢查 → 補紀錄＋套用 → 確認；唯一會寫入的 apply 一定在事前檢查之後。"""
-    wf = read("deploy-migrations.yml").split("steps:", 1)[1]  # 只看 steps，不看開頭的說明
-    order = [
-        "migrations_deploy plan",
-        "migrations_deploy precheck",
-        "migrations_deploy apply",
-        "migrations_deploy verify",
-    ]
-    positions = [wf.index(s) for s in order]
-    assert positions == sorted(positions)
-    # 要補紀錄（只有 repair）時也要先跑檢查，確認物件存在
-    assert "if: steps.plan.outputs.repair != '' || steps.plan.outputs.pending != ''" in wf
+    """每個 job：比對 → 事前檢查 → 補紀錄＋套用 → 確認；寫入的 apply 一定在事前檢查之後。"""
+    for name, job in _deploy_jobs(read("deploy-migrations.yml")).items():
+        runs = [s.get("run", "") for s in job["steps"]]
+        order = [next(i for i, r in enumerate(runs) if f"migrations_deploy {cmd}" in r)
+                 for cmd in ("plan", "precheck", "apply", "verify")]  # fmt: skip
+        assert order == sorted(order), name
+        # 要補紀錄（只有 repair）時也要先跑檢查，確認物件存在
+        cond = "steps.plan.outputs.repair != '' || steps.plan.outputs.pending != ''"
+        assert sum(s.get("if") == cond for s in job["steps"]) == 2, name
 
 
-def test_deploy_migrations_db_url_only_in_steps_that_need_it():
+def test_deploy_migrations_each_job_uses_its_own_db_and_target():
     wf = read("deploy-migrations.yml")
-    job_header = wf.split("steps:")[0]
-    assert "DB_URL" not in job_header.split("jobs:")[1]  # 不放在 job 層級：安裝套件的步驟拿不到
-    assert wf.count("DB_URL: ${{ secrets.PRODUCTION_DB_URL }}") == 4
+    jobs = _deploy_jobs(wf)
+    for name, secret in (("staging", "STAGING_DB_URL"), ("production", "PRODUCTION_DB_URL")):
+        steps = [s for s in jobs[name]["steps"] if "DB_URL" in s.get("env", {})]
+        assert len(steps) == 4, name
+        for step in steps:
+            assert step["env"]["DB_URL"] == f"${{{{ secrets.{secret} }}}}", name
+            assert step["env"]["FX_DEPLOY_TARGET"] == name
+        assert "env" not in jobs[name]  # 不放在 job 層級：安裝套件的步驟拿不到
+    assert "SUPABASE_DB_URL" not in wf  # 連線字串不能叫這個名字
     for line in wf.splitlines():
         assert not re.search(r"echo .*DB_URL", line), line
 
 
 def test_deploy_migrations_writes_with_python_not_cli():
     """寫入用 psycopg（CLI 3.0.0 解析不了 pooler 連線字串）；apply 要拿到第 1 步的計畫。"""
-    wf = read("deploy-migrations.yml").split("steps:", 1)[1]
-    assert "npx" not in wf and "supabase@" not in wf
-    apply = wf.split("3. 補紀錄＋套用", 1)[1].split("- name:", 1)[0]
-    assert "EXPECT_REPAIR: ${{ steps.plan.outputs.repair }}" in apply
-    assert "EXPECT_PENDING: ${{ steps.plan.outputs.pending }}" in apply
+    for name, job in _deploy_jobs(read("deploy-migrations.yml")).items():
+        runs = " ".join(s.get("run", "") for s in job["steps"])
+        assert "npx" not in runs and "supabase@" not in runs
+        (apply,) = [s for s in job["steps"] if "migrations_deploy apply" in s.get("run", "")]
+        assert apply["env"]["EXPECT_REPAIR"] == "${{ steps.plan.outputs.repair }}", name
+        assert apply["env"]["EXPECT_PENDING"] == "${{ steps.plan.outputs.pending }}", name
 
 
 def test_deploy_migrations_triggers_only_on_migration_changes():

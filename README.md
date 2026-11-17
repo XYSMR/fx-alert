@@ -163,7 +163,7 @@ pg_cron 的排程寫在 `supabase/migrations/20261116153000_dispatch_24h.sql`（
 | `ci` | push、PR | validate-config＋防外洩、ruff、pytest、前端測試、Deno（Edge Functions）、資料庫 RLS 測試（真正的 Supabase） |
 | `staging-check` | 手動、staging 的 pg_cron | 用 staging 的 Supabase 跑一次（預設只讀；勾 `send` 才真的寄信） |
 | `keepalive` | 每週日、手動 | 讀一次公開幣別清單 |
-| `deploy-migrations` | push 到 main 且 `supabase/migrations/**` 或 `supabase/prechecks/**` 有變更、手動（改前端、文件不會觸發） | **需要核准**（Environment `production`）→ 事前檢查 → 套用 migration 到正式專案，見〈[資料庫變更](#資料庫變更)〉 |
+| `deploy-migrations` | push 到 main 且 `supabase/migrations/**` 或 `supabase/prechecks/**` 有變更、手動（改前端、文件不會觸發） | 先套用到 **staging**（不需核准）→ **staging 成功才**輪到正式專案（**需要核准**，Environment `production`）；手動可選只跑 staging（可選 PR 分支），見〈[資料庫變更](#資料庫變更)〉 |
 
 ## 設定一覽
 
@@ -180,6 +180,13 @@ repo 是公開的：**有權限的金鑰只放 Secrets、Edge Function Secrets�
 | `SMTP_PASSWORD` | Gmail **應用程式密碼**（帳號需開啟兩步驟驗證） |
 | `HEALTHCHECK_PING_URL` | （選用）healthchecks.io 的 ping 網址；等同密碼 |
 | `STAGING_SUPABASE_URL`、`STAGING_SUPABASE_SECRET_KEY`、`STAGING_UNSUBSCRIBE_SECRET` | 只給 `staging-check` 用 |
+
+### GitHub Environment `staging`（Settings → Environments）
+
+| 項目 | 設定 |
+|---|---|
+| Required reviewers | 不設（staging 是測試環境，`deploy-migrations` 的 staging job 直接執行） |
+| Environment secret `STAGING_DB_URL` | staging 資料庫的 **Session pooler** 連線字串（含資料庫密碼），取得方式和下面的 `PRODUCTION_DB_URL` 一樣（換成 staging 專案）。**不要**叫 `SUPABASE_DB_URL`，也不要設成一般的 repository secret |
 
 ### GitHub Environment `production`（Settings → Environments）
 
@@ -527,9 +534,15 @@ python -m http.server 8000 -d site         # 開 http://localhost:8000/
 migration 放在 `supabase/migrations/`，檔名 `<14 位數字版本號>_<名稱>.sql`。
 
 1. **PR**：CI 在本機 Supabase 套用全部 migration 並跑 RLS 測試。
-2. **staging**：合併前，在 staging 的 SQL Editor 套用並驗證。
-3. **正式專案**：合併到 main 後（`supabase/migrations/**` 或 `supabase/prechecks/**` 有變更才會觸發），
-   `deploy-migrations` 自動啟動，**等你在 Actions 頁面按核准**才執行：
+2. **staging（合併前）**：Actions → `deploy-migrations` → **Run workflow** → Use workflow from 選 **PR 的分支**、
+   target 選 **staging** → 套用後在 staging 驗證。不用再把 SQL 貼進 SQL Editor。
+   **PR 最後沒有合併、或合併前又改了 migration**，staging 會和 main 不一致，見〈[staging 多出來的 migration](#staging-多出來的-migration)〉。
+3. **合併到 main 後**（`supabase/migrations/**` 或 `supabase/prechecks/**` 有變更才會觸發）：`deploy-migrations` 自動啟動，
+   **先套用到 staging**（第 2 步已經套用過的話，這一步什麼都不做）；**staging 成功才會輪到正式專案**，
+   正式專案**等你在 Actions 頁面按核准**才執行。staging 失敗時正式專案的 job 直接略過，不會出現核准按鈕。
+   手動 **Run workflow** 選 target **production** 也一樣先跑 staging（只能在 main 跑）。
+
+   兩個 job 的步驟相同：
    1. 比對 repo 和資料庫的紀錄（`supabase_migrations.schema_migrations`），算出要補紀錄、要套用哪些版本（只讀）
    2. **事前檢查**（只讀；任何一項沒通過就停止，什麼都不寫）
       - 要補紀錄的版本：`supabase/baseline_checks/<版本號>_*.sql` 確認那個 migration 建立的物件真的存在
@@ -537,7 +550,8 @@ migration 放在 `supabase/migrations/`，檔名 `<14 位數字版本號>_<名�
         避免「其實沒套用、卻被標成已套用」
       - 待套用的版本：`supabase/prechecks/<版本號>_*.sql` 回傳任何一列就停止（log 只印列數，不印內容）
    3. **唯一會寫入的一步**：再確認計畫和第 1 步相同、在同一個連線上再跑一次第 2 步的檢查，然後
-      - 補上以前手動套用、但沒有紀錄的版本（`supabase/migrations_baseline.txt`；只寫紀錄，不重新執行）
+      - 補上以前手動套用、但沒有紀錄的版本（正式專案 `supabase/migrations_baseline.txt`、
+        staging `supabase/migrations_baseline_staging.txt`；只寫紀錄，不重新執行）
       - 依序套用，每個 migration 一個交易（SQL 和紀錄一起 commit；失敗就整個 rollback，不會只套用一半）
    4. 再比對一次，確認沒有遺漏
 
@@ -555,7 +569,30 @@ migration 放在 `supabase/migrations/`，檔名 `<14 位數字版本號>_<名�
 事前檢查失敗時，到 SQL Editor 執行同一段 SQL 找出資料、修正後重跑。
 
 `migrations_baseline.txt` 只記錄自動部署開始前手動套用的 7 個版本，**之後的 migration 不要加進去**；
-每個版本都要有一個 `supabase/baseline_checks/` 物件檢查（每列回傳 `item`、`ok`），測試會確認。
+`migrations_baseline_staging.txt` 同理（staging 2026-11-17 時沒有紀錄的 7 個版本）。
+兩份清單的每個版本都要有一個 `supabase/baseline_checks/` 物件檢查（每列回傳 `item`、`ok`；兩邊共用），測試會確認。
+
+#### staging 多出來的 migration
+
+用 PR 分支套用到 staging 之後，有兩種情況會讓 staging 和 main 不一致：
+
+| 情況 | 怎麼發現 | 會怎樣 |
+|---|---|---|
+| **PR 沒有合併**（關掉了） | 之後每次 staging job 第 1 步都會出現**警告**「staging 有 main 沒有的 migration（還沒合併的 PR？）：<版本>」，Actions 的執行摘要也會列出 | 只警告，不擋其他部署（PR 還開著時本來就會這樣）。但 staging 多了 main 沒有的表或欄位，之後的測試可能不準 |
+| **PR 套用到 staging 之後又改了 migration，再合併** | 合併後 staging job 第 1 步**失敗**：「staging 紀錄裡的內容和 repo 不同：<版本>」（比對紀錄裡存的 SQL 和 repo 的檔案） | staging 失敗，**正式專案不會執行**，直到清理完 |
+
+手動檢查（任何時候）：Actions → `deploy-migrations` → Run workflow → target **staging**、分支 **main**，
+看第 1 步有沒有上面兩種訊息；沒有要套用的東西時，什麼都不會寫入。
+
+**清理**（都在 staging 的 SQL Editor，每一步先確認再執行）：
+1. 寫一段**還原 SQL**，把那個 migration 建立的東西拿掉（`drop table / drop column / drop function / cron.unschedule …`），
+   改過的東西改回 main 的樣子。不確定的話，先看那個 PR 的 migration 內容，一項一項對應。
+2. 刪掉那一筆紀錄：`delete from supabase_migrations.schema_migrations where version = '<版本>';`
+3. 重跑 `deploy-migrations`：
+   - PR **沒合併**：target staging、分支 main，確認警告不見了
+   - PR **改過再合併**：target staging、分支 main，會用 main 的新版內容重新套用；成功後再跑 target production（或重跑那次失敗的 workflow）
+
+建議：PR 關掉不合併時，**當下就清理** staging；同一時間盡量只有一個「已套用到 staging、還沒合併」的 migration PR。
 
 **第一次設定**（只做一次）：
 
@@ -572,6 +609,15 @@ migration 放在 `supabase/migrations/`，檔名 `<14 位數字版本號>_<名�
      建議只用英數字，否則特殊字元要做 URL 編碼
 3. 在 `production` environment 新增 **Environment secret** `PRODUCTION_DB_URL`，貼上第 2 步的完整字串
 4. Actions → `deploy-migrations` → **Run workflow** → 核准 → log 應顯示要補紀錄的版本，最後「確認完成」
+
+**staging 第一次設定**（只做一次）：
+
+1. Settings → Environments → **New environment** → 名稱 `staging`（不設 Required reviewers）
+2. 取得 staging 專案的 Session pooler 連線字串（同上面第 2 步，換成 staging 專案）
+3. 在 `staging` environment 新增 **Environment secret** `STAGING_DB_URL`
+4. Actions → `deploy-migrations` → **Run workflow** → 分支 `main`、target **staging**：
+   第 1 步應顯示**補紀錄 7 個版本**（`migrations_baseline_staging.txt`）、沒有要套用的；
+   第 2 步 7 個版本都「物件都存在，可以補紀錄」；最後「確認完成（staging）」
 
 ## 退回單人版
 

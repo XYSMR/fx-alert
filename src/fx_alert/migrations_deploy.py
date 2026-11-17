@@ -1,4 +1,12 @@
-"""正式專案的 migration 部署（.github/workflows/deploy-migrations.yml 使用）。
+"""migration 部署到 staging／正式專案（.github/workflows/deploy-migrations.yml 使用）。
+
+部署目標用環境變數 FX_DEPLOY_TARGET 指定：production（預設）或 staging。
+兩邊的差別：
+  * 基準清單：正式專案 supabase/migrations_baseline.txt、
+    staging supabase/migrations_baseline_staging.txt
+  * 資料庫紀錄裡有、repo 沒有的版本：正式專案停止；staging 只警告
+    （可能是還沒合併的 PR 先套用到 staging，見 README〈staging 多出來的 migration〉）
+  * staging 另外比對內容：紀錄裡存的 SQL 和 repo 的檔案不同（PR 套用到 staging 之後又改過）→ 停止
 
 用法（連線字串放在環境變數 DB_URL，永遠不印出來）：
     python -m fx_alert.migrations_deploy plan       # 算出要補紀錄、要套用的版本（只讀）
@@ -40,6 +48,13 @@ MIGRATIONS_DIR = ROOT / "supabase" / "migrations"
 PRECHECKS_DIR = ROOT / "supabase" / "prechecks"
 BASELINE_CHECKS_DIR = ROOT / "supabase" / "baseline_checks"
 BASELINE_FILE = ROOT / "supabase" / "migrations_baseline.txt"
+STAGING_BASELINE_FILE = ROOT / "supabase" / "migrations_baseline_staging.txt"
+
+# 部署目標：基準清單、GitHub 上連線字串的 secret 名稱（只用在錯誤訊息）
+TARGETS = {
+    "production": (BASELINE_FILE, "production environment 的 PRODUCTION_DB_URL"),
+    "staging": (STAGING_BASELINE_FILE, "staging environment 的 STAGING_DB_URL"),
+}
 
 MIGRATION_FILE = re.compile(r"^(\d{14})_([a-z0-9_]+)\.sql$")
 VERSION = re.compile(r"^\d{14}$")
@@ -57,6 +72,22 @@ class DeployError(Exception):
 class Plan:
     repair: tuple[str, ...]  # 已經手動套用、要補紀錄的版本
     pending: tuple[str, ...]  # 要用 db push 套用的版本
+    unknown: tuple[str, ...] = ()  # 只有 staging：紀錄裡有、repo 沒有（只警告）
+
+    def steps(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """會寫入的部分（補紀錄、套用）；和第 1 步的計畫比對時只看這兩項。"""
+        return self.repair, self.pending
+
+
+def target() -> str:
+    name = os.environ.get("FX_DEPLOY_TARGET", "production").strip() or "production"
+    if name not in TARGETS:
+        raise DeployError(f"FX_DEPLOY_TARGET 只能是 {' 或 '.join(TARGETS)}：{name!r}")
+    return name
+
+
+def baseline_file(name: str | None = None) -> Path:
+    return TARGETS[name or target()][0]
 
 
 def migration_file(version: str, migrations_dir: Path = MIGRATIONS_DIR) -> Path:
@@ -99,15 +130,19 @@ def read_baseline(path: Path = BASELINE_FILE) -> list[str]:
     return versions
 
 
-def make_plan(local: list[str], recorded: set[str], baseline: list[str]) -> Plan:
+def make_plan(
+    local: list[str], recorded: set[str], baseline: list[str], *, allow_unknown: bool = False
+) -> Plan:
     """比對 repo 裡的 migration 和資料庫的紀錄。
 
-    * 紀錄裡有、repo 裡沒有 → 停止（資料庫被套用過不在 repo 的變更，要先查清楚）
+    * 紀錄裡有、repo 裡沒有 → 正式專案停止（資料庫被套用過不在 repo 的變更，要先查清楚）；
+      staging（allow_unknown）只記在 plan.unknown，不影響其他版本
     * 基準清單裡、紀錄沒有 → 補紀錄（repair）
     * 其他 repo 有、紀錄沒有 → 待套用（db push）；必須比所有已套用的版本都新，避免順序錯亂
+      （staging 的 unknown 不算：還沒合併的 PR 版本號可能比較新）
     """
-    unknown = sorted(recorded - set(local))
-    if unknown:
+    unknown = tuple(sorted(recorded - set(local)))
+    if unknown and not allow_unknown:
         raise DeployError(f"資料庫紀錄裡有 repo 沒有的版本：{', '.join(unknown)}")
     missing_baseline = sorted(set(baseline) - set(local))
     if missing_baseline:
@@ -115,12 +150,12 @@ def make_plan(local: list[str], recorded: set[str], baseline: list[str]) -> Plan
 
     repair = tuple(v for v in local if v in baseline and v not in recorded)
     pending = tuple(v for v in local if v not in recorded and v not in baseline)
-    applied = recorded | set(repair)
+    applied = (recorded - set(unknown)) | set(repair)
     if pending and applied and pending[0] < max(applied):
         raise DeployError(
             f"待套用的 {pending[0]} 比已套用的 {max(applied)} 還舊：順序可能錯亂，請先確認"
         )
-    return Plan(repair=repair, pending=pending)
+    return Plan(repair=repair, pending=pending, unknown=unknown)
 
 
 def _check_file(version: str, folder: Path) -> Path | None:
@@ -153,9 +188,7 @@ def failed_items(rows: list[tuple]) -> list[str]:
 def db_url() -> str:
     url = os.environ.get("DB_URL", "").strip()
     if not url:
-        raise DeployError(
-            "沒有 DB_URL：請在 GitHub 的 production environment 設定 PRODUCTION_DB_URL"
-        )
+        raise DeployError(f"沒有 DB_URL：請在 GitHub 設定 {TARGETS[target()][1]}")
     return url
 
 
@@ -223,6 +256,36 @@ def run_object_check(conn, sql: str) -> list[str]:
     return failed_items(rows)
 
 
+def recorded_statements(conn) -> dict[str, list[str] | None]:
+    """每個版本紀錄裡存的 SQL（沒有 statements 欄位時回傳空 dict）。"""
+    if not history_has_statements(conn):
+        return {}
+    with conn.cursor() as cur:
+        cur.execute("select version, statements from supabase_migrations.schema_migrations")
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def changed_versions(
+    statements: dict[str, list[str] | None], local: list[str], since: str | None
+) -> list[str]:
+    """紀錄裡的 SQL 和 repo 檔案不同的版本（只比 since 以後、由這個工具寫的紀錄）。
+
+    這個工具寫紀錄時 statements = [整個檔案的內容]；更早由 Supabase CLI 寫的紀錄會拆成多段，
+    不能直接比，所以只比 since（基準清單的第一個版本）以後的。
+    """
+    if since is None:
+        return []
+    changed = []
+    for version in local:
+        if version < since or version not in statements:
+            continue
+        saved = statements[version]
+        current = migration_file(version).read_text(encoding="utf-8")
+        if saved != [current]:
+            changed.append(version)
+    return changed
+
+
 def history_has_statements(conn) -> bool:
     with conn.cursor() as cur:
         cur.execute(
@@ -261,7 +324,7 @@ def run_checks(conn, plan: Plan) -> list[str]:
     failed = []
     # 1. 要補紀錄的版本：物件必須真的存在，否則不補（補了之後就永遠不會再套用）
     for version in plan.repair:
-        path = baseline_check_path(version)
+        path = baseline_check_path(version)  # 正式專案和 staging 共用同一組檢查檔
         if path is None:
             failed.append(version)
             print(f"::error::{version}：沒有 supabase/baseline_checks/{version}_*.sql，不補紀錄")
@@ -326,7 +389,28 @@ def _summary(lines: list[str]) -> None:
 
 
 def _current_plan(conn) -> Plan:
-    return make_plan(local_versions(), recorded_versions(conn), read_baseline())
+    """目前的計畫。staging 另外確認紀錄的內容和 repo 一致（不一致就停止）。"""
+    name = target()
+    baseline = read_baseline(baseline_file(name))
+    local = local_versions()
+    plan = make_plan(local, recorded_versions(conn), baseline, allow_unknown=name == "staging")
+    if name == "staging":
+        changed = changed_versions(recorded_statements(conn), local, min(baseline, default=None))
+        if changed:
+            raise DeployError(
+                f"staging 紀錄裡的內容和 repo 不同：{', '.join(changed)}"
+                "（PR 套用到 staging 之後又改過？見 README〈staging 多出來的 migration〉）"
+            )
+    return plan
+
+
+def _warn_unknown(plan: Plan) -> None:
+    if plan.unknown:
+        print(
+            "::warning::staging 有 main 沒有的 migration（還沒合併的 PR？）："
+            f"{' '.join(plan.unknown)}；PR 不合併的話要清理，"
+            "見 README〈staging 多出來的 migration〉"
+        )
 
 
 def cmd_plan() -> int:
@@ -334,14 +418,17 @@ def cmd_plan() -> int:
     mask_password(url)
     with connect(url) as conn:
         plan = _current_plan(conn)
+    print(f"部署目標：{target()}")
     print(f"要補紀錄（以前手動套用過，只寫紀錄不執行）：{' '.join(plan.repair) or '（無）'}")
     print(f"要套用：{' '.join(plan.pending) or '（無）'}")
+    _warn_unknown(plan)
     _write_output(repair=" ".join(plan.repair), pending=" ".join(plan.pending))
     _summary(
-        ["### migration 部署計畫", ""]
+        [f"### migration 部署計畫（{target()}）", ""]
         + [f"- 補紀錄：`{v}`" for v in plan.repair]
         + [f"- 套用：`{v}`" for v in plan.pending]
         + ([] if plan.repair or plan.pending else ["- 沒有需要套用的 migration"])
+        + [f"- ⚠️ staging 有 main 沒有的版本：`{v}`" for v in plan.unknown]
     )
     return 0
 
@@ -365,7 +452,7 @@ def cmd_apply() -> int:
     with connect(url, read_only=False) as conn:
         plan = _current_plan(conn)
         conn.rollback()
-        if expected is not None and plan != expected:
+        if expected is not None and plan.steps() != expected.steps():
             raise DeployError(
                 "資料庫的紀錄和第 1 步看到的不同（可能同時有其他人在部署），不寫入；請重跑 workflow"
             )
@@ -419,7 +506,8 @@ def cmd_verify() -> int:
     if plan.repair or plan.pending:
         print(f"::error::還有沒套用的版本：{' '.join(plan.repair + plan.pending)}")
         return 1
-    print("確認完成：repo 裡的 migration 都已套用、也都有紀錄")
+    _warn_unknown(plan)
+    print(f"確認完成（{target()}）：repo 裡的 migration 都已套用、也都有紀錄")
     return 0
 
 

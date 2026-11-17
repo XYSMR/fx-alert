@@ -1,4 +1,4 @@
-"""正式專案 migration 部署：計畫、事前檢查檔、基準清單（不需要資料庫）。"""
+"""migration 部署（staging／正式專案）：計畫、事前檢查檔、基準清單（不需要資料庫）。"""
 
 import re
 
@@ -138,10 +138,11 @@ def test_recorded_versions_requires_supabase_history_table():
 
 
 def test_every_baseline_version_has_one_object_check():
-    baseline = md.read_baseline()
+    """正式專案和 staging 的基準清單共用 supabase/baseline_checks/。"""
+    baseline = set(md.read_baseline()) | set(md.read_baseline(md.STAGING_BASELINE_FILE))
     files = sorted(md.BASELINE_CHECKS_DIR.glob("*.sql"))
     versions = [f.name[:14] for f in files]
-    assert versions == baseline, "基準清單的每個版本都要有一個、而且只有一個物件檢查"
+    assert versions == sorted(baseline), "基準清單的每個版本都要有一個、而且只有一個物件檢查"
     for path in files:
         sql = re.sub(r"--.*", "", path.read_text(encoding="utf-8")).strip().lower()
         assert sql.startswith(("select", "with")), f"{path.name} 必須是一段 select"
@@ -197,3 +198,71 @@ def test_apply_on_actions_requires_the_plan(monkeypatch, capsys):
     monkeypatch.delenv("EXPECT_PENDING", raising=False)
     assert md.main(["apply"]) == 1
     assert "第 1 步的計畫" in capsys.readouterr().out
+
+
+# ---------- staging ----------
+
+
+def test_staging_baseline_is_the_seven_manual_versions():
+    """staging 只有前 5 筆紀錄（2026-11-17 唯讀查詢），後面 7 個是手動套用、沒有紀錄的。"""
+    staging = md.read_baseline(md.STAGING_BASELINE_FILE)
+    local = md.local_versions()
+    assert staging == [
+        "20261110020000", "20261111000000", "20261116000000", "20261116040000",
+        "20261116142000", "20261116153000", "20261116195500",
+    ]  # fmt: skip
+    assert set(staging) <= set(local)
+    # 前 5 個 + 這 7 個 = 目前 repo 的全部（之後新增的交給 workflow 套用）
+    assert local[:12] == local[:5] + staging
+
+
+def test_target_and_baseline_file(monkeypatch):
+    monkeypatch.delenv("FX_DEPLOY_TARGET", raising=False)
+    assert md.target() == "production" and md.baseline_file() == md.BASELINE_FILE
+    monkeypatch.setenv("FX_DEPLOY_TARGET", "staging")
+    assert md.target() == "staging" and md.baseline_file() == md.STAGING_BASELINE_FILE
+    monkeypatch.setenv("FX_DEPLOY_TARGET", "prod")
+    with pytest.raises(DeployError, match="staging 或 production|production 或 staging"):
+        md.target()
+
+
+def test_missing_db_url_hint_names_the_staging_secret(monkeypatch, capsys):
+    monkeypatch.delenv("DB_URL", raising=False)
+    monkeypatch.setenv("FX_DEPLOY_TARGET", "staging")
+    assert md.main(["plan"]) == 1
+    out = capsys.readouterr().out
+    assert "STAGING_DB_URL" in out and "PRODUCTION_DB_URL" not in out
+
+
+def test_staging_allows_unknown_versions_but_production_does_not():
+    """還沒合併的 PR 先套用到 staging：staging 只警告，其他版本照常套用。"""
+    pr = "20261120000000"
+    plan = make_plan([V1, V2, V3], recorded={V1, V2, pr}, baseline=[], allow_unknown=True)
+    assert plan == Plan(repair=(), pending=(V3,), unknown=(pr,))
+    with pytest.raises(DeployError, match="repo 沒有的版本"):
+        make_plan([V1, V2, V3], recorded={V1, V2, pr}, baseline=[])
+
+
+def test_unknown_newer_version_does_not_block_older_pending():
+    """PR 的版本號比 main 新合併的還新：順序檢查不算 staging 多出來的版本。"""
+    pr = "20261130000000"
+    plan = make_plan([V1, V4], recorded={V1, pr}, baseline=[], allow_unknown=True)
+    assert plan.pending == (V4,) and plan.unknown == (pr,)
+
+
+def test_expected_plan_compares_only_write_steps():
+    a = Plan(("x",), ("y",), unknown=("z",))
+    assert a.steps() == Plan(("x",), ("y",)).steps()
+
+
+def test_changed_versions_compares_saved_sql_with_repo():
+    v = "20261116195500"
+    current = md.migration_file(v).read_text(encoding="utf-8")
+    local = md.local_versions()
+    since = "20261110020000"
+    assert md.changed_versions({v: [current]}, local, since) == []
+    assert md.changed_versions({v: [current + "-- 改過\n"]}, local, since) == [v]
+    # Supabase CLI 寫的舊紀錄（拆成多段）不比
+    assert md.changed_versions({"20261109000000": ["a", "b"]}, local, since) == []
+    assert md.changed_versions({v: ["x"]}, local, None) == []
+    assert md.changed_versions({}, local, since) == []  # 還沒套用的不算

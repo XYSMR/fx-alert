@@ -19,6 +19,8 @@
 | `alert_rules` | 每人每幣別一條規則 + 狀態 | 讀 / 刪自己的；新增、修改只限 `target`、`buffer`、`enabled`（新增時另含 `currency`） | — | 全部 |
 | `notifications` | 通知紀錄 | 讀自己的 | — | 全部 |
 
+出國換匯計畫的 `trips`、`trip_exchanges`、`trip_notifications` 和兩個 view 見 [trip-plan.md](trip-plan.md)〈資料表與權限〉。
+
 重點規則（都有測試，見 `tests/db/test_schema_rls.py`）：
 
 - `state`、`state_changed_at`、`state_rate`、`state_target` 只有排程能寫。

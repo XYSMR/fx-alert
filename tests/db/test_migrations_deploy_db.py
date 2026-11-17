@@ -154,3 +154,93 @@ def test_baseline_check_before_24h_migration():
     finally:
         c.rollback()
         c.close()
+
+
+# ---------- staging：基準清單、物件檢查、內容比對 ----------
+
+
+def test_staging_baseline_checks_pass_on_current_schema(conn):
+    """staging 要補紀錄的 7 個版本：物件檢查在目前的 schema（全部 migration 都套用過）上都通過。"""
+    plan = md.Plan(repair=tuple(md.read_baseline(md.STAGING_BASELINE_FILE)), pending=())
+    assert md.run_checks(conn, plan) == []
+
+
+@pytest.mark.parametrize(
+    ("version", "break_it", "expected"),
+    [
+        ("20261116195500", "drop table public.trip_notifications cascade",
+         "table public.trip_notifications"),
+        ("20261116142000", "alter table public.profiles drop column notify_end cascade",
+         "public.profiles.notify_end"),
+        ("20261116040000", "drop table public.check_status", "table public.check_status"),
+        ("20261116153000",
+         "select cron.schedule('fx-alert-dispatch', '5,35 1-7 * * 1-5', "
+         "'select private.dispatch_check_rates()')",
+         "cron job fx-alert-dispatch 每天 24 小時（5,35 * * * *）"),
+    ],
+)  # fmt: skip
+def test_staging_missing_object_is_reported(version, break_it, expected):
+    """物件不存在（在最後 rollback 的交易裡弄壞）→ 回報那一項，不會補紀錄。"""
+    c = psycopg.connect(DB_URL)
+    try:
+        sql = md.baseline_check_path(version).read_text(encoding="utf-8")
+        with c.cursor() as cur:
+            cur.execute(break_it)
+            cur.execute(sql)
+            assert expected in md.failed_items(cur.fetchall())
+    finally:
+        c.rollback()
+        c.close()
+
+
+def test_recorded_statements_and_content_check(wconn):
+    """紀錄裡存的 SQL 和 repo 的檔案比對：一樣 → 沒事；PR 改過 → 回報那個版本。"""
+    v = "20261116195500"
+    current = md.migration_file(v).read_text(encoding="utf-8")
+    with wconn.cursor() as cur:
+        cur.execute("delete from supabase_migrations.schema_migrations where version = %s", (v,))
+    md.record_applied(wconn, v, "trips", current, with_statements=True)
+    local = md.local_versions()
+
+    def saved():
+        # 只看這個測試寫的那一筆：CI 的本機 Supabase 是用 CLI 套用的，其他紀錄被 CLI 拆成多段
+        # （真正的 staging 從 20261110020000 起都是這個工具寫的整個檔案）
+        return {v: md.recorded_statements(wconn)[v]}
+
+    assert md.changed_versions(saved(), local, "20261110020000") == []
+    with wconn.cursor() as cur:
+        cur.execute(
+            "update supabase_migrations.schema_migrations set statements = %s where version = %s",
+            ([current + "-- 舊版\n"], v),
+        )
+    assert md.changed_versions(saved(), local, "20261110020000") == [v]
+
+
+def test_staging_plan_from_current_state(wconn, monkeypatch):
+    """staging 現在的狀態（只有前 5 筆紀錄）→ 計畫是補 7 筆紀錄、沒有要套用的；
+    多一個還沒合併的 PR 版本 → 只列在 unknown（警告），計畫不變。"""
+    monkeypatch.setenv("FX_DEPLOY_TARGET", "staging")
+    local = md.local_versions()
+    with wconn.cursor() as cur:
+        cur.execute("delete from supabase_migrations.schema_migrations")
+        for v in local[:5]:
+            cur.execute(
+                "insert into supabase_migrations.schema_migrations (version, name) "
+                "values (%s, 'x')",
+                (v,),
+            )
+    plan = md._current_plan(wconn)
+    assert plan.repair == tuple(md.read_baseline(md.STAGING_BASELINE_FILE))
+    assert plan.pending == () and plan.unknown == ()
+
+    with wconn.cursor() as cur:
+        cur.execute(
+            "insert into supabase_migrations.schema_migrations (version, name) "
+            "values ('29990101000000', 'open_pr')"
+        )
+    plan = md._current_plan(wconn)
+    assert plan.unknown == ("29990101000000",) and len(plan.repair) == 7
+
+    monkeypatch.setenv("FX_DEPLOY_TARGET", "production")
+    with pytest.raises(md.DeployError, match="repo 沒有的版本"):
+        md._current_plan(wconn)

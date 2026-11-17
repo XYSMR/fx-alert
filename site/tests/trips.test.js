@@ -162,3 +162,41 @@ test("瀏覽器裡只往全域放 FxTrips（不會和 app.js 的 parseAmount 等
   assert.deepEqual(added, ["FxTrips"]);
   assert.deepEqual(Object.keys(sandbox.FxTrips).sort(), ["hide", "show"]);
 });
+
+// ---------- 建立前的預覽：反映實際規則（今天建立會不會寄） ----------
+
+test("previewSteps：提醒日當天建立 = 今天會寄；早於今天 = 已過，不會寄", () => {
+  const s = t.schedule("2026-11-24", CAL); // 分批 11/03、最後 11/17、出發前 11/20
+  assert.deepEqual(t.previewSteps(s, "2026-11-17").map((x) => [x.date, x.state]),
+    [["2026-11-03", "past"], ["2026-11-17", "today"], ["2026-11-20", "next"]]);
+  assert.deepEqual(t.previewSteps(s, "2026-11-18").map((x) => x.state), ["past", "past", "next"]);
+  // 出發前提醒要在前一天以前建立：就是今天也不會寄
+  assert.deepEqual(t.previewSteps(s, "2026-11-20").map((x) => x.state), ["past", "past", "past"]);
+  assert.deepEqual(t.previewSteps(s, "2026-11-01").map((x) => x.state), ["next", "next", "next"]);
+});
+
+test("previewLines：畫面上的文字", () => {
+  const s = t.schedule("2026-11-24", CAL);
+  assert.deepEqual(t.previewLines(s, "2026-11-17"), [
+    "建立後會在這些時候寄信（都避開週末和國定假日，只在銀行營業日寄）：",
+    "11/3（二） 可以考慮分批換的提醒（已過，不會寄）",
+    "11/17（二） 最後換匯提醒（今天）",
+    "11/20（五） 出發前提醒",
+    "已在最後階段：不寄價格提醒，只寄上面的固定提醒。",
+  ]);
+  const far = t.schedule("2027-01-17", CAL);
+  assert.match(t.previewPriceNote(far, "2026-11-17"), /前 20% 低.*建立當天就可能寄；12\/24（四） 起改成前 40% 低/);
+  assert.match(t.previewPriceNote(far, "2027-01-04"), /已在接近出發的階段.*前 40% 低.*建立當天就可能寄/);
+});
+
+test("預覽和 Python 的規則一致：fixture 裡每個出發日，今天建立時「今天」的那一封就是 decide 會寄的", () => {
+  // Python 的規則：分批、最後是 created_on <= 提醒日；出發前是 created_on < 提醒日
+  for (const [dep] of FIXTURE.cases.slice(0, 60)) {
+    const s = t.schedule(dep, CAL);
+    for (const today of [s.nearOn, s.finalOn, s.lastCall]) {
+      const steps = t.previewSteps(s, today);
+      assert.equal(steps[0].state === "today", today === s.nearOn && s.nearOn !== s.finalOn, dep);
+      assert.equal(steps[2].state, today >= s.lastCall ? "past" : "next", dep);
+    }
+  }
+});

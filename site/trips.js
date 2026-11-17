@@ -124,6 +124,49 @@
     });
   }
 
+  /**
+   * 建立旅程前的預覽：今天建立的話，三封固定提醒各會不會寄（和 trip_rules.decide 一樣）。
+   *   分批、最後：提醒日早於今天 → 已過，不會寄；就是今天 → 今天會寄（當天建立也會寄）
+   *   出發前：要在那天之前建立才會寄，所以就是今天也算已過
+   * state = past（已過，不會寄）/ today / next
+   */
+  function previewSteps(sch, today) {
+    const items = [
+      { date: sch.nearOn, text: "可以考慮分批換的提醒", lastCall: false },
+      { date: sch.finalOn, text: "最後換匯提醒", lastCall: false },
+      { date: sch.lastCall, text: "出發前提醒", lastCall: true },
+    ];
+    return items.map(({ date, text, lastCall }) => {
+      let state = "next";
+      if (date < today || (lastCall && date === today)) state = "past";
+      else if (date === today) state = "today";
+      return { date, text, state };
+    });
+  }
+
+  /** 預覽的價格提醒說明：建立時在哪個階段，價格提醒從什麼時候開始 */
+  function previewPriceNote(sch, today) {
+    switch (phase(sch, today)) {
+      case "far":
+        return `價格在近 30 天的前 ${FAR_PCT}% 低時寄提醒（7 天最多 1 封），建立當天就可能寄；` +
+          `${shortDate(sch.nearOn)} 起改成前 ${NEAR_PCT}% 低（5 天最多 1 封）。`;
+      case "near":
+        return `已在接近出發的階段：價格在近 30 天的前 ${NEAR_PCT}% 低時寄提醒（5 天最多 1 封），建立當天就可能寄。`;
+      default:
+        return "已在最後階段：不寄價格提醒，只寄上面的固定提醒。";
+    }
+  }
+
+  /** 預覽的文字（一行一項）：給畫面和測試用 */
+  function previewLines(sch, today) {
+    const label = { past: "（已過，不會寄）", today: "（今天）", next: "" };
+    return [
+      "建立後會在這些時候寄信（都避開週末和國定假日，只在銀行營業日寄）：",
+      ...previewSteps(sch, today).map((x) => `${shortDate(x.date)} ${x.text}${label[x.state]}`),
+      previewPriceNote(sch, today),
+    ];
+  }
+
   /** 標題下的一句話：距離出發還有幾天、現在是哪個階段 */
   function phaseText(sch, today) {
     const left = daysBetween(today, sch.departure);
@@ -360,17 +403,17 @@
       type: "text", id: "trip-name", autocomplete: "off", maxlength: "30",
       "aria-label": "名稱（可不填）", placeholder: "例如 東京",
     });
-    const preview = th("p", { class: "hint", id: "trip-preview" });
+    const preview = th("div", { class: "hint", id: "trip-preview" });
     const update = () => {
       const d = validateDeparture(dep.value, today);
       if (d.error) {
-        preview.textContent = "";
+        preview.replaceChildren();
         return;
       }
-      const s = schedule(d.value, tCal);
-      const parts = [`${shortDate(s.nearOn)} 起可以考慮分批`, `${shortDate(s.finalOn)} 最後換匯提醒`,
-        `${shortDate(s.lastCall)} 出發前提醒`].filter((_, i) => [s.nearOn, s.finalOn, s.lastCall][i] > today);
-      preview.textContent = parts.length ? `預計寄信的日子：${parts.join("、")}（都會避開週末和國定假日）。` : "";
+      const [title, ...rest] = previewLines(schedule(d.value, tCal), today);
+      const note = rest.pop();
+      preview.replaceChildren(title,
+        th("ul", { class: "trip-steps" }, ...rest.map((line) => th("li", {}, line))), note);
     };
     dep.addEventListener("change", update);
     const submit = async (event) => {
@@ -489,7 +532,7 @@
     const twd = p.done ? null : estimateTwd(p.remaining, rate);
     const notices = tData.notices.filter((x) => x.trip_id === trip.id).slice(0, 3);
     const steps = milestones(sch, today, createdOn);
-    const stepLabel = { done: "已過", today: "今天", next: "", skipped: "建立時已過，不寄" };
+    const stepLabel = { done: "已過", today: "今天", next: "", skipped: "建立時已過，不會寄" };
 
     return th("article", { class: "trip", "data-trip": String(trip.id) },
       th("div", { class: "card-head" },
@@ -549,7 +592,7 @@
   const exported = {
     TRIP_DISCLAIMER, KIND_LABELS, MAX_TRIPS,
     dayMs, addDays, daysBetween, taipeiToday, shortDate,
-    makeCalendar, schedule, phase, milestones, phaseText,
+    makeCalendar, schedule, phase, milestones, phaseText, previewSteps, previewPriceNote, previewLines,
     parseAmount, formatAmount, amountOf, validateAmount, validateRate, validateDeparture, validateName,
     progress, estimateTwd, rankText, tripErrorMessage, tablesMissing,
     upcomingCount, sortTrips,

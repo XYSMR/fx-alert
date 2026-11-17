@@ -202,3 +202,64 @@ def test_bad_user_id_skips_that_mail(tmp_path):
     r, n = _run(tmp_path, OneWatchStore("not-a-uuid"), UnsubscribeConfig.from_env(ENV), [])
     assert n.sent == []
     assert r.errors and "退訂連結" in r.errors[0]
+
+
+# ---------- unsubscribe-check：確認 GitHub Secret 和 Edge Function 一致 ----------
+
+
+def _probe_cfg():
+    from fx_alert.unsubscribe import UnsubscribeConfig
+
+    return UnsubscribeConfig(
+        secret="k" * 40, supabase_url="https://abcdefghijklmnopqrst.supabase.co"
+    )
+
+
+@pytest.mark.parametrize(
+    "status,body,ok,text",
+    [
+        (200, {"ok": True, "status": "no_account"}, True, "通過"),
+        (403, {"ok": False, "error": "invalid_link"}, False, "簽章不符"),
+        (500, {"ok": False, "error": "not_configured"}, False, "沒有設定 UNSUBSCRIBE_SECRET"),
+        (500, {"ok": False, "error": "update_failed"}, False, "FX_SECRET_KEY"),
+        # 不該發生：測試帳號不存在
+        (200, {"ok": True, "status": "unsubscribed"}, False, "回應 200"),
+        (404, None, False, "回應 404"),
+    ],
+)
+def test_check_unsubscribe_results(status, body, ok, text):
+    from fx_alert.main import check_unsubscribe
+
+    calls = []
+    result = check_unsubscribe(_probe_cfg(), lambda url: calls.append(url) or (status, body))
+    assert result[0] is ok and text in result[1]
+    (url,) = calls
+    assert "u=00000000-0000-4000-8000-000000000000" in url  # 不存在的帳號，不會退訂任何人
+    assert "/functions/v1/unsubscribe?" in url
+
+
+def test_check_unsubscribe_never_prints_link_or_signature(monkeypatch, capsys):
+    from fx_alert import main as main_mod
+    from fx_alert.unsubscribe import sign
+
+    secret = "k" * 40
+    monkeypatch.setenv("UNSUBSCRIBE_SECRET", secret)
+    monkeypatch.setenv("SUPABASE_URL", "https://abcdefghijklmnopqrst.supabase.co")
+    monkeypatch.setattr(main_mod, "_post_json", lambda url: (403, {"error": "invalid_link"}))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    assert main_mod.main(["unsubscribe-check"]) == 1
+    out = "".join(capsys.readouterr())
+    assert "簽章不符" in out and "::error::" in out
+    sig = sign(secret, "00000000-0000-4000-8000-000000000000")
+    for leaked in (sig, secret, "functions/v1", "abcdefghijklmnopqrst"):
+        assert leaked not in out
+
+
+def test_check_unsubscribe_connection_error():
+    from fx_alert.main import check_unsubscribe
+
+    def boom(url):
+        raise ConnectionError(f"cannot reach {url}")
+
+    ok, text = check_unsubscribe(_probe_cfg(), boom)
+    assert not ok and text == "連不到 Edge Function：ConnectionError"

@@ -349,6 +349,31 @@ GitHub Secret 和正式專案的 Edge Function Secret 要**同時**換成同一�
 `python -c "import secrets; print(secrets.token_urlsafe(32))"`）。換掉後，**已經寄出的信裡的退訂連結會失效**。
 換完跑一次第 4 步的退訂測試（回 `no_account`）。
 
+### 確認 GitHub Secret 和 Edge Function 的 `UNSUBSCRIBE_SECRET` 一致
+
+`python -m fx_alert unsubscribe-check`（需要環境變數 `SUPABASE_URL`、`UNSUBSCRIBE_SECRET`）：
+用一個**不存在的帳號**（`00000000-0000-4000-8000-000000000000`）產生退訂連結，POST 給 Edge Function。
+
+| 結果 | 意思 |
+|---|---|
+| 通過（200 `no_account`） | 兩邊一致；沒有這個帳號，所以什麼都沒改 |
+| 簽章不符（403 `invalid_link`） | 兩邊不一致：信裡的退訂連結會失效 |
+| 沒有設定（500 `not_configured`） | Edge Function 沒有 `UNSUBSCRIBE_SECRET` 或少於 32 字元 |
+| 寫不進資料庫（500 `update_failed`） | 簽章一致，但 Edge Function 的 `FX_SECRET_KEY` 有問題 |
+
+只印結果，不印連結、簽章或密鑰，可以在公開的 Actions log 裡跑。`staging-check` 每次都先跑這一步，
+不一致就停下來、不寄信。
+
+**對齊 staging**（`STAGING_UNSUBSCRIBE_SECRET` 和 staging 專案 Edge Function 的 `UNSUBSCRIBE_SECRET`）：
+Supabase 後台看不到已設定的值，所以兩邊一起換成同一個新值：
+1. 在自己的電腦產生新值（不要貼到任何地方，只複製到下面兩處）：
+   `python -c "import secrets; print(secrets.token_urlsafe(48))"`
+2. GitHub → repo **Settings → Secrets and variables → Actions** → `STAGING_UNSUBSCRIBE_SECRET` → **Update secret** → 貼上
+3. Supabase → **staging 專案** → **Edge Functions → Secrets** → `UNSUBSCRIBE_SECRET` → 改成同一個值（結尾不能有空白）
+4. Actions → `staging-check` → Run workflow（不勾 send）→ `Unsubscribe link check` 顯示「通過」
+
+staging 換掉後，舊的 staging 測試信裡的退訂連結會失效（正式專案不受影響）。
+
 ## 排程沒有執行時怎麼排查
 
 GitHub Actions 的 `schedule` 是「盡力而為」：官方文件寫明負載高時（尤其整點、UTC 00:00–08:00）會**延遲**，

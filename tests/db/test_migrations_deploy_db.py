@@ -201,13 +201,19 @@ def test_recorded_statements_and_content_check(wconn):
         cur.execute("delete from supabase_migrations.schema_migrations where version = %s", (v,))
     md.record_applied(wconn, v, "trips", current, with_statements=True)
     local = md.local_versions()
-    assert md.changed_versions(md.recorded_statements(wconn), local, "20261110020000") == []
+
+    def saved():
+        # 只看這個測試寫的那一筆：CI 的本機 Supabase 是用 CLI 套用的，其他紀錄被 CLI 拆成多段
+        # （真正的 staging 從 20261110020000 起都是這個工具寫的整個檔案）
+        return {v: md.recorded_statements(wconn)[v]}
+
+    assert md.changed_versions(saved(), local, "20261110020000") == []
     with wconn.cursor() as cur:
         cur.execute(
             "update supabase_migrations.schema_migrations set statements = %s where version = %s",
             ([current + "-- 舊版\n"], v),
         )
-    assert md.changed_versions(md.recorded_statements(wconn), local, "20261110020000") == [v]
+    assert md.changed_versions(saved(), local, "20261110020000") == [v]
 
 
 def test_staging_plan_from_current_state(wconn, monkeypatch):

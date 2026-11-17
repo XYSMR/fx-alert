@@ -192,7 +192,8 @@ def test_cli_dry_run_end_to_end(tmp_path, monkeypatch, capsys):
     )
     assert code == 0
     out = capsys.readouterr().out
-    assert "[dry-run]" in out and "JPY 到價" in out
+    assert "[dry-run] 不寄出：收件人 1 位" in out
+    assert "0.205" not in out and "目標" not in out  # 公開 log 不印目標價
     assert out_file.read_text(encoding="utf-8") == "skipped=false\nstate_changed=true\n"
     assert load_states(tmp_path / "data" / "state.json")["JPY"].state is AlertState.TRIGGERED
 
@@ -313,7 +314,8 @@ def test_state_from_before_this_change_without_target_still_works(tmp_path):
 def test_cli_validate_config_ok(capsys):
     assert main_mod.main(["validate-config", "--config", str(ROOT / "config.yaml")]) == 0
     out = capsys.readouterr().out
-    assert "驗證通過" in out and "JPY: 目標 ≤ 0.205" in out
+    assert "驗證通過" in out and "config.yaml 的規則：2 條（JPY、KRW）" in out
+    assert "0.205" not in out and "0.0245" not in out  # CI 的 log 不印目標價
 
 
 def test_cli_validate_config_fails(tmp_path, capsys):
@@ -418,7 +420,7 @@ def test_cli_single_mode_is_default(monkeypatch):
 
 def test_cli_prints_warning_when_deferred(monkeypatch, capsys):
     monkeypatch.setattr(
-        main_mod, "run_check", lambda *a, **kw: main_mod.CheckResult(deferred=["JPY 規則#1"])
+        main_mod, "run_check", lambda *a, **kw: main_mod.CheckResult(deferred=["規則#1"])
     )
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)

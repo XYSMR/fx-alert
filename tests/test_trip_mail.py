@@ -172,7 +172,7 @@ def test_load_trips_parses_rows():
     assert session.calls[0]["url"] == f"{URL}/rest/v1/active_trips"
     assert "remaining::text" in session.calls[0]["params"]["select"]
     assert (t.key, t.label, t.departure, t.created_on, t.remaining) == (
-        "12", "JPY 旅程#12", date(2026, 12, 20), date(2026, 11, 1), D("30000"))  # fmt: skip
+        "12", "旅程#12", date(2026, 12, 20), date(2026, 11, 1), D("30000"))  # fmt: skip
     assert t.sent == (Sent("cheap_far", date(2026, 11, 2)),)
     assert t.window == NotifyWindow(time(8), time(22))
     assert "@" not in t.label and "@" not in repr(t) and "30000" not in repr(t)
@@ -192,7 +192,7 @@ def test_load_trips_other_error_raises():
 
 
 def trip_watch(**kw):
-    base = dict(key="12", label="JPY 旅程#12", currency="JPY", departure=date(2026, 12, 20),
+    base = dict(key="12", label="旅程#12", currency="JPY", departure=date(2026, 12, 20),
                 created_on=date(2026, 11, 1), remaining=D("30000"), sent=(),
                 recipients=("alice@example.com",), user_id=UID, window=None)  # fmt: skip
     return TripWatch(**{**base, **kw})
@@ -219,7 +219,7 @@ def test_read_only_store_does_not_write_trip_notices():
     (t,) = store.load_trips()
     assert store.record_trip_notice(t, Decision(FINAL, 7), None, NOW) is True
     assert [c["method"] for c in session.calls] == ["GET"]
-    assert logs == ["[dry-run] JPY 旅程#12: 不寫入換匯提醒 final"]
+    assert logs == ["[dry-run] 旅程#12: 不寫入換匯提醒 final"]
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +288,7 @@ def test_cheap_far_is_sent_and_recorded(tmp_path):
     logs = []
     r = run(tmp_path, store, notifier=n, logs=logs)
     assert r.exit_code == 0
-    assert r.trip_notified == ["JPY 旅程#12: cheap_far"]
+    assert r.trip_notified == ["旅程#12: cheap_far"]
     assert store.notices == [("12", "cheap_far", D("0.2040"))]
     (msg,) = n.sent
     assert msg["To"] == "alice@example.com"
@@ -308,7 +308,7 @@ def test_fixed_reminder_without_fresh_quote(tmp_path):
     # 11/16（一）出發：最後提醒 = min(D-7 = 11/09, 倒數第 3 個營業日 11/11) = 11/09
     store = TripStore([trip_watch(departure=date(2026, 11, 16))])
     r = run(tmp_path, store, fetch=lambda: mega_json(jpy="0.2300", when="2026/11/06 16:04:00"))
-    assert r.trip_notified == ["JPY 旅程#12: final"]
+    assert r.trip_notified == ["旅程#12: final"]
 
 
 def test_outside_window_waits(tmp_path):
@@ -322,7 +322,7 @@ def test_outside_window_waits(tmp_path):
 def test_daily_limit_counts_both_kinds(tmp_path):
     store = TripStore([trip_watch()], sent_today=3, trip_sent_today=2)
     r = run(tmp_path, store, daily_limit=5)
-    assert r.deferred == ["JPY 旅程#12"] and store.notices == []
+    assert r.deferred == ["旅程#12"] and store.notices == []
     assert r.exit_code == 0
 
 
@@ -339,19 +339,19 @@ def test_send_failure_is_error_and_not_recorded(tmp_path):
     store = TripStore([trip_watch()])
     r = run(tmp_path, store, notifier=Boom())
     assert store.notices == []
-    assert r.errors == ["JPY 旅程#12 換匯提醒寄送失敗：寄信失敗：*** refused"]
+    assert r.errors == ["旅程#12 換匯提醒寄送失敗：寄信失敗：*** refused"]
 
 
 def test_record_conflict_is_only_a_note(tmp_path):
     logs = []
     r = run(tmp_path, TripStore([trip_watch()], record_ok=False), logs=logs)
     assert r.exit_code == 0
-    assert "JPY 旅程#12: 提醒紀錄已存在或旅程剛被刪除，略過記錄" in logs
+    assert "旅程#12: 提醒紀錄已存在或旅程剛被刪除，略過記錄" in logs
 
 
 def test_record_failure_is_error(tmp_path):
     r = run(tmp_path, TripStore([trip_watch()], fail_record=True))
-    assert r.errors == ["JPY 旅程#12 換匯提醒紀錄寫入失敗：Supabase 回應 500：boom"]
+    assert r.errors == ["旅程#12 換匯提醒紀錄寫入失敗：Supabase 回應 500：boom"]
 
 
 def test_weekend_sends_nothing(tmp_path):

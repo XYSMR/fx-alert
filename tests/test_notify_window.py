@@ -94,10 +94,10 @@ def test_outside_window_does_not_send_or_change_state(tmp_path):
     n, logs = DryRunNotifier(out=io.StringIO()), []
     r = run_at(tmp_path, store, at(2, 35), n, logs)
     assert [m["To"] for m in n.sent] == ["bob@example.com"]
-    assert r.outside_window == ["JPY 規則#1"]
+    assert r.outside_window == ["規則#1"]
     assert [k for k, _ in store.alerts] == ["2"]
     assert store.transitions == []  # 規則#1 狀態不變
-    assert "JPY 規則#1: 已到價，但不在通知時段（台灣時間 08:00–22:00），時段開始後重新判斷" in logs
+    assert "規則#1: 不在通知時段，時段開始後重新判斷" in logs
     assert not any("alice@" in line for line in logs)
     assert r.exit_code == 0
 
@@ -131,7 +131,7 @@ def test_outside_window_does_not_use_daily_limit(tmp_path):
     """時段外的不算寄信額度；也不會被當成「超過上限延後」。"""
     store = MemoryStore([windowed("1", "alice@example.com", DEFAULT)], sent_today=10_000)
     r = run_at(tmp_path, store, at(2, 35))
-    assert r.deferred == [] and r.outside_window == ["JPY 規則#1"]
+    assert r.deferred == [] and r.outside_window == ["規則#1"]
 
 
 # ---------- Supabase：讀通知時段；欄位還不存在時退回全天 ----------

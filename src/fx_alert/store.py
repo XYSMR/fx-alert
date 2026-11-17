@@ -61,7 +61,7 @@ class Watch:
     """一條要檢查的規則。"""
 
     key: str  # 存放處用來找回這條規則的識別碼
-    label: str  # 給 log 看（不能含 email）
+    label: str  # 給公開 log 看：只能是編號（不能含 email、幣別、目標價）
     rule: Rule
     state: AlertState | None  # None = 沒有紀錄（第一次），視為等待中
     state_target: Decimal | None  # 進入目前狀態時的目標價；給 rules.decide 判斷「改過目標價」
@@ -75,7 +75,7 @@ class TripWatch:
     """一趟要檢查的旅程（出國換匯計畫）。"""
 
     key: str  # trips.id
-    label: str  # 給 log 看：幣別＋旅程編號（不能含 email、金額）
+    label: str  # 給公開 log 看：只能是編號（不能含 email、幣別、金額、日期）
     currency: str
     departure: date
     created_on: date
@@ -454,7 +454,8 @@ def _row_to_watch(row: dict) -> Watch:
     state_target = row.get("state_target")
     return Watch(
         key=str(row["id"]),
-        label=f"{currency} 規則#{row['id']}",
+        # 公開 log 用：只有編號（不含幣別，避免和公開的匯率對照推出目標價）
+        label=f"規則#{row['id']}",
         rule=rule,
         state=AlertState(row["state"]),
         state_target=None if state_target is None else _dec(state_target),
@@ -486,7 +487,7 @@ def _row_to_trip(row: dict) -> TripWatch:
     )
     return TripWatch(
         key=str(row["id"]),
-        label=f"{row['currency']} 旅程#{row['id']}",
+        label=f"旅程#{row['id']}",  # 公開 log 用：只有編號
         currency=row["currency"],
         departure=date.fromisoformat(row["departure"]),
         created_on=date.fromisoformat(row["created_on"]),

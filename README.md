@@ -194,6 +194,17 @@ Vault 一律在後台頁面新增，**不要**用 SQL Editor 執行 `vault.creat
 測試會比對兩邊一致。多人版每次檢查都記錄這 18 種的走勢：
 
 - 沒有人設定提醒的幣別缺報價：log 只記一行「注意」，不算失敗。
+
+### 公開 log 的原則
+
+repo 是公開的，GitHub Actions 的 log 任何人都看得到。所以 log 裡：
+
+- **只寫編號**：「規則#7」「旅程#12」，連幣別都不寫（幣別加上公開的匯率，可以推出目標價的範圍）
+- **不寫**：email、user_id、目標價、buffer、通知時段、外幣金額、出發日、距離出發的天數、信件主旨（主旨含目標價）
+- 可以寫：狀態（armed → triggered）、提醒種類、牌告時間、幣別數量、錯誤類型
+- CLI 印出的每一行再經過 `redact_emails`（萬一錯誤訊息帶了 email）
+- `config.yaml` 驗證只列幣別，不印目標價
+- `tests/test_log_privacy.py`：走真正的 `check --mode multi`（含 dry-run、寄信失敗、通知時段外、換匯提醒），資料裡放容易辨認的目標價、email、金額、日期，檢查輸出裡都找不到
 - 有人設定提醒的幣別缺報價：算失敗（可能漏通知），healthchecks.io 會通知。
 - 牌告出現清單裡沒有的新幣別：log 提醒更新 `currencies.py`。
 
@@ -322,7 +333,7 @@ GitHub 和 Edge Function **用的是兩把不同的 key**，兩把都要換；**
 3. **更新 Edge Function**：正式專案 → Edge Functions → **Secrets** → Name 手動輸入 `FX_SECRET_KEY`（結尾不能有空白）
    → 貼上 `edge_functions_3` → Save（出現「Replace secret」就確認）。
 4. **測試新 key**：
-   - Actions → `check-rates` → Run workflow，勾 **dry_run**（不寄信、不寫入）：log 要讀到每條規則（例如「規則#1 … 尚未到價」），
+   - Actions → `check-rates` → Run workflow，勾 **dry_run**（不寄信、不寫入）：log 要讀到每條規則（例如「規則#1: armed → armed：尚未到價」），
      沒有出現 Supabase 401。
    - Edge Functions 的冒煙測試（步驟見 [`docs/multi-user.md`](docs/multi-user.md)「冒煙測試」）：
      兩支 function 用 GET 回 405、delete-account 沒帶 token 回 401、退訂錯誤簽章回 403；
@@ -595,5 +606,5 @@ D = 出發日。下面的日期都會調整成**銀行營業日**（現鈔只能
 - 「相對便宜」只在**今天已經有新牌告**時判斷（早上 8 點牌告還是昨天的；颱風停班沒有牌告的日子也不寄）；分批、最後、出發前這三封固定提醒不看價格
 - 和到價提醒共用：通知時段（不在時段內就等時段開始）、每日寄信上限（兩種一起算）、退訂連結（退訂後兩種都不寄）
 - 寄出後寫 `trip_notifications`；資料庫的 unique 擋掉重複（同一天第二封、固定提醒第二次），寫入衝突只記一行注意
-- 公開的 Actions log 只出現「JPY 旅程#12」和提醒種類，不出現 email 和金額
+- 公開的 Actions log 只出現「旅程#12」和提醒種類，不出現 email、幣別、金額、出發日（見〈公開 log 的原則〉）
 - 營業日曆過期（旅程的出發日超過 `seed/tw_bank_calendar.csv` 的範圍）會在 log 提醒更新

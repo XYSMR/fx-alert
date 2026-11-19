@@ -159,7 +159,7 @@ pg_cron 的排程寫在 `supabase/migrations/20261116153000_dispatch_24h.sql`（
 | Workflow | 觸發 | 做什麼 |
 |---|---|---|
 | `check-rates` | pg_cron、GitHub schedule、手動 | gate（去重）→ check（抓匯率、判斷、寄信、寫回狀態、寫 `check_status`、ping 監控）→ 資料有變才 commit 走勢和 deploy（見下方〈什麼時候 commit、部署〉） |
-| `deploy-pages` | push 前端／設定到 main、被 check-rates 呼叫、手動 | 產生 `config.js`、`data.json`（`AUTH_ENABLED=true` 時是不含個人設定的公開版）→ 防外洩檢查 → 部署 |
+| `deploy-pages` | push 前端／設定到 main、被 check-rates 呼叫、手動 | 產生 `config.js`、`data.json`（`AUTH_ENABLED=true` 時是不含個人設定的公開版）→ 防外洩檢查 → 部署（GitHub 暫時讀不到剛上傳的檔案時，等 30 秒、90 秒自動重試，最多 3 次） |
 | `ci` | push、PR | validate-config＋防外洩、ruff、pytest、前端測試、Deno（Edge Functions）、資料庫 RLS 測試（真正的 Supabase） |
 | `staging-check` | 手動、staging 的 pg_cron | 用 staging 的 Supabase 跑一次（預設只讀；勾 `send` 才真的寄信） |
 | `keepalive` | 每週日、手動 | 讀一次公開幣別清單 |

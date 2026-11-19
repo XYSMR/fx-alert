@@ -26,14 +26,14 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 12 # 部署最多重試 3 次（每次最多 2 分鐘，中間等 30 秒、90 秒）
     # 不論從哪裡觸發，同一時間只部署一次；正在跑的會跑完，排隊中較舊的會被較新的取代
     concurrency:
       group: pages
       cancel-in-progress: false
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deploy1.outputs.page_url || steps.deploy2.outputs.page_url || steps.deploy3.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -132,6 +132,37 @@ jobs:
         with:
           path: _site
 
+      # GitHub 偶爾在上傳完之後讀不到剛上傳的檔案（"Fetching artifact metadata failed …
+      # Please re-run the deployment at a later time" → "No artifacts named github-pages"），
+      # 2026-11-16 12:35、11-19 06:35、09:35 都是這樣。檔案其實已經上傳好了，等一下再部署通常就會成功，
+      # 所以最多試 3 次：第 1、2 次失敗不讓整個 job 失敗，第 3 次還失敗才算失敗。
+      # 每次最多等 2 分鐘（預設 10 分鐘），整個 job 不會超過 timeout-minutes。
       - name: Deploy to GitHub Pages
-        id: deployment
+        id: deploy1
+        continue-on-error: true
         uses: actions/deploy-pages@v4
+        with:
+          timeout: 120000
+
+      - name: 等 30 秒再重試
+        if: steps.deploy1.outcome == 'failure'
+        run: echo "第 1 次部署失敗（GitHub 暫時讀不到剛上傳的檔案），30 秒後重試" && sleep 30
+
+      - name: Deploy to GitHub Pages（第 2 次）
+        id: deploy2
+        if: steps.deploy1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+        with:
+          timeout: 120000
+
+      - name: 等 90 秒再重試
+        if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'
+        run: echo "第 2 次部署也失敗，90 秒後最後一次重試" && sleep 90
+
+      - name: Deploy to GitHub Pages（第 3 次）
+        id: deploy3
+        if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        with:
+          timeout: 120000

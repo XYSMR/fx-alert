@@ -37,6 +37,33 @@ def test_deploy_builds_public_data_when_auth_enabled():
     assert "site/privacy.html" in wf
 
 
+def test_pages_deploy_retries_transient_github_errors():
+    """GitHub 偶爾讀不到剛上傳的網站檔案：最多部署 3 次。
+    前兩次失敗不讓 job 失敗，第 3 次失敗才算失敗。"""
+    job = yaml.safe_load(read("deploy-pages.yml"))["jobs"]["deploy"]
+    steps = job["steps"]
+    deploys = [s for s in steps if str(s.get("uses", "")).startswith("actions/deploy-pages@")]
+    assert [s["id"] for s in deploys] == ["deploy1", "deploy2", "deploy3"]
+    assert deploys[0].get("continue-on-error") is True and "if" not in deploys[0]
+    assert deploys[1].get("continue-on-error") is True
+    assert deploys[1]["if"] == "steps.deploy1.outcome == 'failure'"
+    assert "continue-on-error" not in deploys[2]  # 最後一次失敗 → job 失敗（不會默默沒部署）
+    assert deploys[2]["if"] == (
+        "steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'"
+    )
+    # 重試之間有等待；每次最多 2 分鐘，加起來不超過 job 的時間上限
+    waits = [s for s in steps if "sleep" in s.get("run", "")]
+    assert len(waits) == 2
+    total = sum(d["with"]["timeout"] for d in deploys) / 60000 + (30 + 90) / 60
+    assert total < job["timeout-minutes"] - 2  # 留時間給前面的步驟
+    # 只有一個上傳：三次都部署同一份檔案
+    upload = "actions/upload-pages-artifact@"
+    uploads = [s for s in steps if str(s.get("uses", "")).startswith(upload)]
+    assert len(uploads) == 1
+    url = job["environment"]["url"]
+    assert all(f"steps.{i}.outputs.page_url" in url for i in ("deploy1", "deploy2", "deploy3"))
+
+
 def test_keepalive_uses_only_public_values():
     wf = read("keepalive.yml")
     assert "secrets." not in wf

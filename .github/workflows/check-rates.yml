@@ -59,7 +59,7 @@ jobs:
           echo "觸發方式：$EVENT ${CRON:+（cron: $CRON）}${SOURCE:+（source: $SOURCE）}"
           echo "開始時間：$(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M:%S') 台灣時間"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Read last check from state branch
         run: |
@@ -93,9 +93,9 @@ jobs:
       config_ok: ${{ steps.validate.outputs.ok }}
       published: ${{ steps.commit.outputs.published }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip

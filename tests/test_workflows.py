@@ -287,3 +287,25 @@ def test_gate_reads_check_status_with_public_values_only():
     assert "SUPABASE_URL: ${{ vars.SUPABASE_URL }}" in gate
     assert "SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}" in gate
     assert "secrets." not in gate  # gate 不需要任何 secret
+
+
+# 這些 action 的舊版用 Node.js 20（GitHub 已停用，會被強制改用 Node 24 並出現警告）。
+# 下面是改用 Node 24 的最低版本；新版也可以，舊版不行。
+NODE24_MIN = {
+    "actions/checkout": 5,
+    "actions/setup-python": 6,
+    "actions/setup-node": 5,
+    "actions/configure-pages": 6,
+    "actions/deploy-pages": 5,
+    "actions/upload-pages-artifact": 4,
+}
+
+
+def test_actions_use_node24_versions():
+    found = []
+    for path in WF.glob("*.yml"):
+        for name, major in re.findall(r"uses:\s*([\w-]+/[\w-]+)@v(\d+)", path.read_text("utf-8")):
+            if name in NODE24_MIN:
+                found.append(name)
+                assert int(major) >= NODE24_MIN[name], f"{path.name}: {name}@v{major} 還是 Node 20"
+    assert set(found) == set(NODE24_MIN)  # 每個都有檢查到（避免改名後測試默默失效）

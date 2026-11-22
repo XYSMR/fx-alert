@@ -1,4 +1,6 @@
-"""Feature flags（migration 20261123000100）：flag 表權限、is_feature_on()、伺服器端檢查。
+"""Feature flags（migration 20261123000100、20261123000150）。
+
+flag 表權限、is_feature_on()、伺服器端檢查、supabase/staging/ 的兩個腳本。
 
 角色本身（預設 user、使用者改不了自己的角色）由 Task 2 的 tests/db/test_roles.py 測試；
 is_feature_on() 透過 public.current_user_role() 讀角色。
@@ -17,6 +19,9 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import timedelta
+from pathlib import Path
+
+import pytest
 
 DENIED = "42501"
 CHECK = "23514"
@@ -57,14 +62,25 @@ def as_uid(db, user_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_initial_values_keep_production_unchanged(db):
+def test_production_defaults(db):
+    """套用全部 migration 後 = 正式專案的預設值（PM 決定）：
+    trip_plan 已上線維持全開（flag 只當 kill switch）；quick_target 關閉。"""
     db.as_anon()
     assert db.rows(
         "select flag, enabled, rollout, allowed_roles from public.feature_flags order by flag"
     ) == [
-        ("quick_target", True, 0, ["admin", "beta"]),
+        ("quick_target", False, 0, ["admin", "beta"]),
         ("trip_plan", True, 100, ["admin", "beta"]),
     ]
+
+
+def test_quick_target_is_off_for_everyone_by_default(db, alice, bob):
+    """正式預設：連 admin、beta 都看不到 quick_target（enabled = false）。"""
+    set_role(db, bob, "admin")
+    for user in (alice, bob):
+        db.as_user(user)
+        assert not is_on(db, "quick_target")
+        assert is_on(db, "trip_plan")
 
 
 def test_everyone_can_read_flags_but_nobody_can_change_them_through_the_api(db, alice):
@@ -113,6 +129,16 @@ def test_kill_switch_turns_off_everyone_including_admin(db, alice, bob):  # TC2/
     for user in (alice, bob):
         db.as_user(user)
         assert not is_on(db, "trip_plan")
+
+
+@pytest.mark.parametrize(
+    ("trip", "quick"), [(True, True), (True, False), (False, True), (False, False)]
+)
+def test_four_on_off_combinations_are_independent(db, alice, trip, quick):  # C1–C4
+    set_flag(db, "trip_plan", enabled=trip, rollout=100)
+    set_flag(db, "quick_target", enabled=quick, rollout=100)
+    db.as_user(alice)
+    assert (is_on(db, "trip_plan"), is_on(db, "quick_target")) == (trip, quick)
 
 
 def test_beta_and_admin_are_on_at_rollout_0(db, alice, bob):  # TC6
@@ -186,3 +212,53 @@ def test_restrictive_policy_blocks_api_when_flag_is_off(db, alice):  # TC3
     set_flag(db, "trip_plan", enabled=True, rollout=100)
     db.as_user(alice)
     assert db.run(sql, params) == 1
+
+
+# ---------------------------------------------------------------------------
+# supabase/staging/ 的兩個腳本（在 staging 的 SQL Editor 手動執行，不是 migration）
+# ---------------------------------------------------------------------------
+
+STAGING = Path(__file__).resolve().parents[2] / "supabase" / "staging"
+
+
+def flag_rows(db) -> list[tuple]:
+    db.as_postgres()
+    return db.rows(
+        "select flag, enabled, rollout, allowed_roles from public.feature_flags order by flag"
+    )
+
+
+def test_staging_config_opens_quick_target_to_admin_and_beta_only(db, alice, bob):
+    db.as_postgres()
+    db.cur.execute((STAGING / "feature_flags.sql").read_text("utf-8"))
+    assert flag_rows(db) == [
+        ("quick_target", True, 0, ["admin", "beta"]),
+        ("trip_plan", True, 100, ["admin", "beta"]),
+    ]
+    set_role(db, bob, "beta")
+    db.as_user(alice)
+    assert not is_on(db, "quick_target")
+    db.as_user(bob)
+    assert is_on(db, "quick_target")
+
+
+def test_staging_evidence_script_passes_and_restores_flags(db):
+    before = flag_rows(db)
+    db.as_postgres()
+    db.cur.execute((STAGING / "feature_flags_evidence.sql").read_text("utf-8"))
+    while db.cur.nextset():  # 最後一段 select 才是結果表格
+        pass
+    results = db.cur.fetchall()
+    assert [r[0] for r in results] == [
+        "C1", "C2", "C3", "C4", "K1", "K2", "B1", "B2", "B3", "S1"
+    ]  # fmt: skip
+    assert all(r[-1] == "PASS" for r in results), results
+    assert flag_rows(db) == before
+
+
+def test_staging_scripts_are_not_migrations():
+    """staging 腳本不能被部署 workflow 當成 migration 套用到正式專案。"""
+    assert STAGING.is_dir()
+    assert not (STAGING.parent / "migrations" / "feature_flags.sql").exists()
+    for path in STAGING.glob("*.sql"):
+        assert not path.name[:14].isdigit(), path

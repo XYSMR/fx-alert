@@ -22,6 +22,8 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # staging 金鑰和 Gmail 密碼放在 Environment「staging-runtime」，只允許 main（同 check-rates）
+    environment: staging-runtime
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7

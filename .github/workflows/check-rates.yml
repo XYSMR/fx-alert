@@ -88,6 +88,9 @@ jobs:
     needs: gate
     if: ${{ !cancelled() && needs.gate.outputs.run != 'false' }}
     runs-on: ubuntu-latest
+    # 正式金鑰（secret key、Gmail 密碼、退訂密鑰、監控網址）放在 Environment「production-runtime」，
+    # 只允許 main：有寫入權限的協作者推自己的 branch、改 workflow 也拿不到。不設審核者（排程每 30 分鐘跑）。
+    environment: production-runtime
     timeout-minutes: 5
     outputs:
       config_ok: ${{ steps.validate.outputs.ok }}

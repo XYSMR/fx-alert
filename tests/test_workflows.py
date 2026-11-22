@@ -309,3 +309,23 @@ def test_actions_use_node24_versions():
                 found.append(name)
                 assert int(major) >= NODE24_MIN[name], f"{path.name}: {name}@v{major} 還是 Node 20"
     assert set(found) == set(NODE24_MIN)  # 每個都有檢查到（避免改名後測試默默失效）
+
+
+def test_jobs_with_secrets_are_bound_to_an_environment():
+    """協作者有寫入權限（個人 repo 沒有 Triage）：推自己的 branch 就能跑改過的 workflow。
+    用到 secrets 的 job 一律綁 Environment，金鑰只放在 Environment，不放 repository secrets。"""
+    expected = {
+        ("check-rates.yml", "check"): "production-runtime",
+        ("staging-check.yml", "check"): "staging-runtime",
+        ("deploy-migrations.yml", "staging"): "staging",
+        ("deploy-migrations.yml", "production"): "production",
+    }
+    found = {}
+    for path in WF.glob("*.yml"):
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for name, job in doc.get("jobs", {}).items():
+            if not re.search(r"secrets\.(?!GITHUB_TOKEN)", json.dumps(job)):
+                continue
+            env = job.get("environment")
+            found[(path.name, name)] = env["name"] if isinstance(env, dict) else env
+    assert found == expected

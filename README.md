@@ -285,7 +285,7 @@ repo 是公開的，GitHub Actions 的 log 任何人都看得到。所以 log �
 |---|---|---|
 | `fx-alert-dispatch-prod`（GitHub fine-grained PAT） | 正式專案 Vault `github_dispatch_token` | **2027-02-08** |
 | `fx-alert-dispatch-staging`（GitHub fine-grained PAT） | staging Vault `github_dispatch_token` | **2027-02-08** |
-| Supabase secret key（`github_actions_2`、`edge_functions_2`） | GitHub Secret `SUPABASE_SECRET_KEY`、Edge Function Secret `FX_SECRET_KEY` | 不會到期 |
+| Supabase secret key（`github_actions_nov26`、`edge_functions_2`） | GitHub Environment `production-runtime` 的 `SUPABASE_SECRET_KEY`、Edge Function Secret `FX_SECRET_KEY` | 不會到期 |
 | `UNSUBSCRIBE_SECRET` | GitHub Secret＋Edge Function Secret（同一個值） | 不會到期 |
 
 更換步驟見〈[定期維護](#定期維護)〉。
@@ -406,7 +406,7 @@ GitHub 和 Edge Function **用的是兩把不同的 key**，兩把都要換；**
 
 1. **建立新 key**：正式專案 → Project Settings → **API Keys** → Secret keys → **Add new secret key**，
    建立兩把，例如 `github_actions_3`、`edge_functions_3`（舊的先不要刪）。
-2. **更新 GitHub**：Settings → Secrets and variables → Actions → `SUPABASE_SECRET_KEY` → 貼上 `github_actions_3`。
+2. **更新 GitHub**：Settings → Environments → `production-runtime` → `SUPABASE_SECRET_KEY` → 編輯 → 貼上 `github_actions_3`。
 3. **更新 Edge Function**：正式專案 → Edge Functions → **Secrets** → Name 手動輸入 `FX_SECRET_KEY`（結尾不能有空白）
    → 貼上 `edge_functions_3` → Save（出現「Replace secret」就確認）。
 4. **測試新 key**：

@@ -169,9 +169,18 @@ pg_cron 的排程寫在 `supabase/migrations/20261116153000_dispatch_24h.sql`（
 
 repo 是公開的：**有權限的金鑰只放 Secrets、Edge Function Secrets、Vault**；Variables 只能放公開值（會出現在網頁裡）。
 
-### GitHub Secrets（Settings → Secrets and variables → Actions）
+### GitHub Environment `production-runtime`（Settings → Environments）
 
-| Secret | 內容 |
+排程（`check-rates` 的 check job）用的正式金鑰。**放在 Environment，不放 repository secrets**：
+個人 repo 的協作者一律有寫入權限，推自己的 branch、改 workflow 就能讀到 repository secrets；
+Environment 限定 `main` 之後，只有合併進 main 的 workflow 拿得到。
+
+| 設定 | 內容 |
+|---|---|
+| Required reviewers | 不設（排程每 30 分鐘自動跑） |
+| Deployment branches and tags | Selected branches → `main` |
+
+| Environment secret | 內容 |
 |---|---|
 | `SUPABASE_URL` | 正式專案網址 `https://<專案代號>.supabase.co` |
 | `SUPABASE_SECRET_KEY` | 正式專案給 GitHub 用的 secret key（`sb_secret_…`） |
@@ -179,7 +188,18 @@ repo 是公開的：**有權限的金鑰只放 Secrets、Edge Function Secrets�
 | `SMTP_USER` | 寄件 Gmail 帳號 |
 | `SMTP_PASSWORD` | Gmail **應用程式密碼**（帳號需開啟兩步驟驗證） |
 | `HEALTHCHECK_PING_URL` | （選用）healthchecks.io 的 ping 網址；等同密碼 |
-| `STAGING_SUPABASE_URL`、`STAGING_SUPABASE_SECRET_KEY`、`STAGING_UNSUBSCRIBE_SECRET` | 只給 `staging-check` 用 |
+
+### GitHub Environment `staging-runtime`（Settings → Environments）
+
+`staging-check` 用。設定同上（不設審核者、只允許 `main`），所以 `staging-check` 只能選 main 執行。
+
+| Environment secret | 內容 |
+|---|---|
+| `STAGING_SUPABASE_URL`、`STAGING_SUPABASE_SECRET_KEY`、`STAGING_UNSUBSCRIBE_SECRET` | staging 專案 |
+| `SMTP_USER`、`SMTP_PASSWORD` | 和 `production-runtime` 相同 |
+
+**Repository secrets（Settings → Secrets and variables → Actions）應該是空的。**
+`tests/test_workflows.py` 檢查：用到 secrets 的 job 一定綁 Environment。
 
 ### GitHub Environment `staging`（Settings → Environments）
 
@@ -425,7 +445,7 @@ GitHub Secret 和正式專案的 Edge Function Secret 要**同時**換成同一�
 Supabase 後台看不到已設定的值，所以兩邊一起換成同一個新值：
 1. 在自己的電腦產生新值（不要貼到任何地方，只複製到下面兩處）：
    `python -c "import secrets; print(secrets.token_urlsafe(48))"`
-2. GitHub → repo **Settings → Secrets and variables → Actions** → `STAGING_UNSUBSCRIBE_SECRET` → **Update secret** → 貼上
+2. GitHub → repo **Settings → Environments → `staging-runtime`** → `STAGING_UNSUBSCRIBE_SECRET` → 編輯 → 貼上
 3. Supabase → **staging 專案** → **Edge Functions → Secrets** → `UNSUBSCRIBE_SECRET` → 改成同一個值（結尾不能有空白）
 4. Actions → `staging-check` → Run workflow（不勾 send）→ `Unsubscribe link check` 顯示「通過」
 

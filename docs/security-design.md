@@ -78,23 +78,27 @@ create policy "trip_plan only when flag is on" on public.trips
 
 | Secret | Where it lives | Used by |
 |---|---|---|
-| `SUPABASE_SECRET_KEY`, `UNSUBSCRIBE_SECRET`, `SMTP_USER`, `SMTP_PASSWORD`, `HEALTHCHECK_PING_URL` | GitHub repository secrets | `check-rates` |
-| `STAGING_*` | GitHub repository secrets | `staging-check` |
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `UNSUBSCRIBE_SECRET`, `SMTP_USER`, `SMTP_PASSWORD`, `HEALTHCHECK_PING_URL` | Environment `production-runtime` (`main` only, no reviewer) | `check-rates` (scheduled) |
+| `STAGING_SUPABASE_*`, `STAGING_UNSUBSCRIBE_SECRET`, `SMTP_*` | Environment `staging-runtime` (`main` only) | `staging-check` |
 | `STAGING_DB_URL` | Environment `staging` | `deploy-migrations` (staging job) |
 | `PRODUCTION_DB_URL` | Environment `production` (required reviewer, `main` only) | `deploy-migrations` (production job) |
 | `UNSUBSCRIBE_SECRET`, `FX_SECRET_KEY` | Supabase Edge Function secrets | Edge Functions |
 | `github_dispatch_token` | Supabase Vault | `pg_cron` → workflow dispatch |
 | Publishable key, project URL | GitHub Variables (public by design) | Website |
 
-Controls: secret scanning and push protection are enabled; CI fails if public files contain an email address, `SMTP_` or `sb_secret_`; secrets are passed only to the steps that need them and never printed (`tests/test_workflows.py`).
+Repository-level secrets: none.
+
+Controls: secret scanning and push protection are enabled; CI fails if public files contain an email address, `SMTP_` or `sb_secret_`; secrets are passed only to the steps that need them and never printed; a test checks that every job using secrets is bound to an environment (`tests/test_workflows.py`).
 
 ### Risk found: teammates and repository secrets
 
-Anyone with **Write** access can push a branch with a modified workflow, and that workflow can read **repository** secrets. Decision for the 4-person team:
+Collaborators on a **personal** repository always get **Write** access (the Triage role exists only in organizations). With Write, anyone can push a branch with a modified workflow, and that workflow can read **repository** secrets. Decision for the 4-person team:
 
-* Teammates get the **Triage** role (issues, project board, reviews) and contribute through **forks**; pull requests from forks do not receive secrets.
-* `main` gets a ruleset: pull request required, CI must pass, no force push.
-* Planned: move the production runtime secrets into an environment limited to `main`.
+* Teammates stay collaborators so they can push branches and open pull requests.
+* All secrets moved from repository secrets into environments that only accept `main`; a workflow on any other branch (or a pull request) cannot read them.
+* Ruleset on `main`: pull request required, 1 approval required (the repository admin can bypass for their own changes), all CI checks must pass, no force push or deletion. A teammate therefore cannot merge a modified workflow into `main` without the maintainer's review.
+* Accepted risk: `STAGING_DB_URL` (environment `staging`) is not branch-limited because migrations are tested on PR branches; it only reaches the staging project, which teammates can already access.
+* Because teammates had Write access before the move, the production secret key and the Gmail app password were rotated.
 
 ## 5. Built now vs planned
 
@@ -106,7 +110,7 @@ Anyone with **Write** access can push a branch with a modified workflow, and tha
 | Secret scanning, push protection, CI secret check | Built |
 | `profiles.role` + `current_user_role()` + tests | Built (this PR) |
 | Dependabot config | Built (this PR) |
-| Dependabot alerts / security updates switched on | Manual setting |
-| Ruleset on `main`, teammates as Triage | Manual setting |
+| Dependabot alerts / security updates, CodeQL, private vulnerability reporting, `SECURITY.md` | Built |
+| Ruleset on `main` (PR + 1 approval + 6 checks) | Built |
 | RLS on `trips` gated by `trip_plan` flag | Planned (after the Operator's flag table) |
-| Production runtime secrets in an environment | Planned |
+| All secrets in branch-limited environments | Built |

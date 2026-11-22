@@ -217,7 +217,7 @@ def test_recorded_statements_and_content_check(wconn):
 
 
 def test_staging_plan_from_current_state(wconn, monkeypatch):
-    """staging 現在的狀態（只有前 5 筆紀錄）→ 計畫是補 7 筆紀錄、沒有要套用的；
+    """staging 2026-11-17 的狀態（只有前 5 筆紀錄）→ 計畫是補 7 筆紀錄、只套用之後新增的版本；
     多一個還沒合併的 PR 版本 → 只列在 unknown（警告），計畫不變。"""
     monkeypatch.setenv("FX_DEPLOY_TARGET", "staging")
     local = md.local_versions()
@@ -229,9 +229,12 @@ def test_staging_plan_from_current_state(wconn, monkeypatch):
                 "values (%s, 'x')",
                 (v,),
             )
+    baseline = md.read_baseline(md.STAGING_BASELINE_FILE)
+    # 基準清單之後才新增的 migration（例如 20261122000000_user_roles）照常列為待套用
+    newer = tuple(v for v in local if v not in set(local[:5]) | set(baseline))
     plan = md._current_plan(wconn)
-    assert plan.repair == tuple(md.read_baseline(md.STAGING_BASELINE_FILE))
-    assert plan.pending == () and plan.unknown == ()
+    assert plan.repair == tuple(baseline)
+    assert plan.pending == newer and plan.unknown == ()
 
     with wconn.cursor() as cur:
         cur.execute(

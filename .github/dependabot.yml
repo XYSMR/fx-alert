@@ -1,0 +1,28 @@
+# Dependabot（SCA）：每週檢查一次相依套件，有新版或安全性修正時自動開 PR。
+# 掃描範圍：
+#   * pip            pyproject.toml（requests、pyyaml、psycopg、pytest、ruff）
+#   * github-actions .github/workflows/*.yml 用到的 actions
+# 不在範圍內（Dependabot 不支援）：
+#   * site/vendor/   手動放進來的 supabase-js、chart.js（升級時照 README 手動更新）
+#   * supabase/functions/  Deno 的 import（版本寫死在 import 網址裡）
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Taipei"
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Taipei"
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]

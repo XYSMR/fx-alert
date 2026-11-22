@@ -1,11 +1,14 @@
-"""Feature flags（migration 20261123000000、20261123000100）：角色、flag 表權限、is_feature_on()。
+"""Feature flags（migration 20261123000100）：flag 表權限、is_feature_on()、伺服器端檢查。
+
+角色本身（預設 user、使用者改不了自己的角色）由 Task 2 的 tests/db/test_roles.py 測試；
+is_feature_on() 透過 public.current_user_role() 讀角色。
 
 對應 A10 的測試案例：
   TC2/TC4 flag 關閉（kill switch）→ 所有人關閉，改一列就生效
   TC3     flag 關閉時直接打 API 新增旅程 → 被 RLS 擋下（403）
   TC5     同一個使用者每次結果都一樣
   TC6     beta / admin 在 rollout 0 時仍然開啟
-  TC7     使用者不能把自己改成 admin
+  TC7     使用者不能把自己改成 admin → tests/db/test_roles.py::test_user_cannot_promote_self
   TC8     沒登入 → 關閉
 """
 
@@ -30,6 +33,7 @@ def set_flag(db, flag, *, enabled=True, rollout=100, allowed_roles=("admin", "be
 
 
 def set_role(db, user_id, role) -> None:
+    """模擬在 SQL Editor 指定角色。"""
     db.as_postgres()
     db.run("update public.profiles set role = %s where user_id = %s", (role, user_id))
 
@@ -139,30 +143,6 @@ def test_rollout_ratio(db):
         as_uid(db, str(uuid.uuid4()))
         on += is_on(db, "quick_target")
     assert 140 < on < 260  # 20%，1000 人的誤差範圍
-
-
-# ---------------------------------------------------------------------------
-# 角色（TC7）
-# ---------------------------------------------------------------------------
-
-
-def test_new_user_is_plain_user(db, alice):
-    db.as_user(alice)
-    assert db.one("select role from public.profiles") == "user"
-
-
-def test_user_cannot_change_own_role(db, alice):  # TC7
-    db.as_user(alice)
-    db.fails("update public.profiles set role = 'admin'", sqlstate=DENIED)
-    db.as_postgres()
-    assert db.one("select role from public.profiles where user_id = %s", (alice,)) == "user"
-
-
-def test_role_must_be_known(db, alice):
-    db.as_postgres()
-    db.fails(
-        "update public.profiles set role = 'root' where user_id = %s", (alice,), sqlstate=CHECK
-    )
 
 
 # ---------------------------------------------------------------------------

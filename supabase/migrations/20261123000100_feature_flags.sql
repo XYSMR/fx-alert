@@ -2,7 +2,7 @@
 --
 -- 網頁、RLS、排程讀的是同一張表，改一列就生效，不用重新部署（使用者重新整理頁面後）。
 --   * enabled = false → kill switch：所有人關閉（包括 admin、beta）
---   * allowed_roles   → 這些角色不看 rollout，一律開啟（profiles.role，20261123000000）
+--   * allowed_roles   → 這些角色不看 rollout，一律開啟（profiles.role，20261122000000_user_roles）
 --   * rollout 0～100  → 其他登入的使用者依 user_id 分桶，同一個人每次結果都一樣
 --   * 沒登入          → 一律關閉
 -- 分桶算法和 src/fx_alert/flags.py 相同（tests/test_flags.py 用這裡算出的值比對）。
@@ -68,7 +68,8 @@ insert into public.feature_flags (flag, enabled, rollout) values
 -- ---------------------------------------------------------------------------
 -- 4. is_feature_on(flag)：目前登入的使用者能不能用這個功能
 --    網頁用 rpc('is_feature_on')，RLS policy 也呼叫它（伺服器端檢查）。
---    security definer：一般使用者看不到別人的 profiles，這裡只讀自己那列的 role。
+--    角色用 Task 2 的 public.current_user_role()（20261122000000_user_roles）。
+--    security definer：anon 不能呼叫 current_user_role()，這裡沒登入時先回 false、不會呼叫到。
 -- ---------------------------------------------------------------------------
 create function public.is_feature_on(p_flag text)
 returns boolean
@@ -81,11 +82,7 @@ as $$
     select f.enabled
        and (select auth.uid()) is not null
        and (
-         exists (
-           select 1 from public.profiles p
-            where p.user_id = (select auth.uid())
-              and p.role = any (f.allowed_roles)
-         )
+         coalesce((select public.current_user_role()) = any (f.allowed_roles), false)
          or ('x' || substr(md5(f.flag || ':' || (select auth.uid())::text), 1, 8))
               ::bit(32)::bigint % 100 < f.rollout
        )

@@ -68,7 +68,13 @@ create policy "trips only when trip_plan is on" on public.trips
   with check ((select public.is_feature_on('trip_plan')));
 ```
 
-It must be **restrictive**. `trips` already has the permissive policy "insert own trips", and PostgreSQL combines permissive policies with **OR**, so a second permissive policy would not block anything (`tests/db/test_feature_flags.py::test_permissive_policy_does_not_block`). A restrictive policy is combined with **AND**: the row must belong to the user **and** `trip_plan` must be on for that user. Only inserts are gated; existing trips stay visible when the flag is off.
+It must be **restrictive**. `trips` already has the permissive policy "insert own trips", and PostgreSQL combines permissive policies with **OR**, so a second permissive policy would not block anything (`tests/db/test_feature_flags.py::test_permissive_policy_does_not_block`). A restrictive policy is combined with **AND**: the row must belong to the user **and** `trip_plan` must be on for that user. When the flag is off the feature becomes **read-only**, matching the Designer's read-only UI (migration `20261123000300_trip_plan_readonly.sql`): five more restrictive policies block update and delete on `trips` and insert, update and delete on `trip_exchanges`. Reads still work, and the scheduler (`service_role`) and account deletion (foreign-key cascade) are not affected.
+
+| Write when `trip_plan` is off | Database result | HTTP (PostgREST) |
+|---|---|---|
+| Insert trip / exchange | error 42501 | 403 |
+| Update trip / exchange | error 42501 (check is in `WITH CHECK`) | 403 |
+| Delete trip / exchange | 0 rows deleted, data unchanged (`USING` hides the row) | 200/204, empty result |
 
 ## 3. Software Composition Analysis (Dependabot)
 
@@ -114,5 +120,5 @@ Collaborators on a **personal** repository always get **Write** access (the Tria
 | Dependabot config | Built |
 | Dependabot alerts / security updates, CodeQL, private vulnerability reporting, `SECURITY.md` | Built |
 | Ruleset on `main` (PR + 1 approval + 6 checks) | Built |
-| Restrictive RLS on `trips` gated by `trip_plan` | Built (`tests/db/test_trips_flag_policy.py`) |
+| Restrictive RLS: `trip_plan` off = read-only for trips and exchanges | Built (`tests/db/test_trips_flag_policy.py`) |
 | All secrets in branch-limited environments | Built |

@@ -32,7 +32,7 @@ def test_policy_is_restrictive_insert_only(db):
         "where schemaname = 'public' and tablename = 'trips' and policyname = %s",
         (POLICY,),
     )
-    assert row == [("RESTRICTIVE", "INSERT", "{authenticated}")]
+    assert row == [("RESTRICTIVE", "INSERT", "{authenticated}")]  # 其餘五種寫入見下方
 
 
 def test_flag_on_user_can_add_trip(db, alice):
@@ -84,3 +84,112 @@ def test_still_cannot_add_trip_for_someone_else(db, alice, bob):
         (bob, dep),
         sqlstate=DENIED,
     )
+
+
+# ---------------------------------------------------------------------------
+# 20261123000300：flag 關閉 = 唯讀（旅程、換匯紀錄都不能新增、修改、刪除）
+# ---------------------------------------------------------------------------
+
+
+def make_trip_with_exchange(db, user) -> tuple[int, int]:
+    """flag 開著的時候建立一趟旅程和一筆換匯紀錄，回傳 (trip_id, exchange_id)。"""
+    sql, params = insert_trip(db)
+    set_flag(db, enabled=True)
+    db.as_user(user)
+    db.cur.execute(sql + " returning id", params)
+    trip_id = db.cur.fetchone()[0]
+    db.cur.execute(
+        "insert into public.trip_exchanges (trip_id, amount) values (%s, 10000) returning id",
+        (trip_id,),
+    )
+    return trip_id, db.cur.fetchone()[0]
+
+
+def counts(db, user) -> tuple[int, int]:
+    db.as_user(user)
+    return (
+        db.one("select count(*) from public.trips"),
+        db.one("select count(*) from public.trip_exchanges"),
+    )
+
+
+def test_all_six_write_policies_are_restrictive(db):
+    db.as_postgres()
+    rows = db.rows(
+        "select tablename, cmd from pg_policies where schemaname = 'public' "
+        "and tablename in ('trips', 'trip_exchanges') and permissive = 'RESTRICTIVE' "
+        "order by 1, 2"
+    )
+    assert rows == [
+        ("trip_exchanges", "DELETE"),
+        ("trip_exchanges", "INSERT"),
+        ("trip_exchanges", "UPDATE"),
+        ("trips", "DELETE"),
+        ("trips", "INSERT"),
+        ("trips", "UPDATE"),
+    ]
+
+
+def test_flag_off_trip_update_is_denied(db, alice):
+    trip_id, _ = make_trip_with_exchange(db, alice)
+    set_flag(db, enabled=False)
+    db.as_user(alice)
+    db.fails("update public.trips set amount = 1 where id = %s", (trip_id,), sqlstate=DENIED)
+    assert db.one("select amount from public.trips where id = %s", (trip_id,)) == 50000
+
+
+def test_flag_off_trip_delete_removes_nothing(db, alice):
+    """刪除被 USING 擋住：不報錯（PostgREST 回 200/204），但 0 列被刪，資料還在。"""
+    trip_id, _ = make_trip_with_exchange(db, alice)
+    set_flag(db, enabled=False)
+    db.as_user(alice)
+    assert db.run("delete from public.trips where id = %s", (trip_id,)) == 0
+    assert counts(db, alice) == (1, 1)
+
+
+def test_flag_off_exchange_insert_is_denied(db, alice):
+    trip_id, _ = make_trip_with_exchange(db, alice)
+    set_flag(db, enabled=False)
+    db.as_user(alice)
+    db.fails(
+        "insert into public.trip_exchanges (trip_id, amount) values (%s, 5000)",
+        (trip_id,),
+        sqlstate=DENIED,
+    )
+    assert counts(db, alice) == (1, 1)
+
+
+def test_flag_off_exchange_update_is_denied(db, alice):
+    _, ex_id = make_trip_with_exchange(db, alice)
+    set_flag(db, enabled=False)
+    db.as_user(alice)
+    db.fails("update public.trip_exchanges set amount = 1 where id = %s", (ex_id,), sqlstate=DENIED)
+
+
+def test_flag_off_exchange_delete_removes_nothing(db, alice):
+    _, ex_id = make_trip_with_exchange(db, alice)
+    set_flag(db, enabled=False)
+    db.as_user(alice)
+    assert db.run("delete from public.trip_exchanges where id = %s", (ex_id,)) == 0
+    assert counts(db, alice) == (1, 1)
+
+
+def test_flag_on_all_writes_work(db, alice):
+    trip_id, ex_id = make_trip_with_exchange(db, alice)
+    db.as_user(alice)
+    assert db.run("update public.trips set amount = 60000 where id = %s", (trip_id,)) == 1
+    assert db.run("update public.trip_exchanges set amount = 2 where id = %s", (ex_id,)) == 1
+    assert db.run("delete from public.trip_exchanges where id = %s", (ex_id,)) == 1
+    assert db.run("delete from public.trips where id = %s", (trip_id,)) == 1
+    assert counts(db, alice) == (0, 0)
+
+
+def test_flag_off_service_role_and_account_deletion_still_work(db, alice):
+    """排程（service_role）不受影響；刪除帳號時旅程照樣連帶刪除（cascade 不經過 RLS）。"""
+    make_trip_with_exchange(db, alice)
+    set_flag(db, enabled=False)
+    db.as_service()
+    assert db.one("select count(*) from public.trips where user_id = %s", (alice,)) == 1
+    db.as_postgres()
+    db.run("delete from auth.users where id = %s", (alice,))
+    assert db.one("select count(*) from public.trips where user_id = %s", (alice,)) == 0

@@ -92,13 +92,11 @@ Controls: secret scanning and push protection are enabled; CI fails if public fi
 
 ### Risk found: teammates and repository secrets
 
-Collaborators on a **personal** repository always get **Write** access (the Triage role exists only in organizations). With Write, anyone can push a branch with a modified workflow, and that workflow can read **repository** secrets. Decision for the 4-person team:
+Collaborators on a **personal** repository always get **Write** access (the Triage role exists only in organizations). With Write, anyone can push a branch with a modified workflow, and that workflow can read **repository** secrets.
 
-* Teammates stay collaborators so they can push branches and open pull requests.
-* All secrets moved from repository secrets into environments that only accept `main`; a workflow on any other branch (or a pull request) cannot read them.
-* Ruleset on `main`: pull request required, 1 approval required (the repository admin can bypass for their own changes), all CI checks must pass, no force push or deletion. A teammate therefore cannot merge a modified workflow into `main` without the maintainer's review.
-* Accepted risk: `STAGING_DB_URL` (environment `staging`) is not branch-limited because migrations are tested on PR branches; it only reaches the staging project, which teammates can already access.
-* Because teammates had Write access before the move, the production secret key and the Gmail app password were rotated.
+* **Accepted for now:** teammates need to push branches (for example `feat/feature-flags`), and they are trusted classmates. No pushed branch changes `.github/workflows/`.
+* **Mitigated now:** the ruleset on `main` requires a pull request with 1 approval (the repository admin can bypass for their own changes) and all CI checks, so a modified workflow cannot reach `main` without review; `production` only deploys from `main`.
+* **Planned (PR #47):** move every secret into environments limited to `main` (`production-runtime`, `staging-runtime`), then rotate the production secret key and the Gmail app password.
 
 ## 5. Built now vs planned
 

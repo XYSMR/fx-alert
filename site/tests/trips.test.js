@@ -124,6 +124,10 @@ test("錯誤訊息", () => {
   assert.match(t.tripErrorMessage({ code: "23514", message: "每趟旅程最多 50 筆換匯紀錄" }), /50 筆/);
   assert.match(t.tripErrorMessage({ code: "23514", message: "出發日要在明天到一年內" }), /一年內/);
   assert.equal(t.tripErrorMessage({ code: "42501" }), "沒有權限，請重新登入");
+  // trip_plan 在頁面打開後被關掉：restrictive policy 擋下（PostgREST 的訊息含 row-level security）
+  assert.equal(t.tripErrorMessage({
+    code: "42501", message: 'new row violates row-level security policy for table "trips"',
+  }), `${t.PAUSED_TEXT}請重新整理頁面。`);
   assert.equal(t.tablesMissing({ code: "PGRST205" }), true);
   assert.equal(t.tablesMissing({ code: "42501" }), false);
 });
@@ -133,6 +137,20 @@ test("旅程數和排序：已出發的不算上限、放在後面", () => {
   assert.equal(t.upcomingCount(trips, "2026-11-16"), 2);
   assert.deepEqual(t.sortTrips(trips, "2026-11-16").map((x) => x.departure),
     ["2026-12-01", "2027-02-01", "2026-11-10"]);
+});
+
+// ---------- trip_plan flag 關閉時（flags.js）----------
+
+test("tripMode：開啟 = full；關閉但有旅程 = readonly（只能看）；關閉又沒有旅程 = hidden", () => {
+  assert.equal(t.tripMode(true, 0), "full");
+  assert.equal(t.tripMode(true, 3), "full");
+  assert.equal(t.tripMode(false, 2), "readonly");
+  assert.equal(t.tripMode(false, 0), "hidden");
+});
+
+test("PAUSED_TEXT 只描述狀態", () => {
+  assert.match(t.PAUSED_TEXT, /暫停新增和修改/);
+  assert.match(t.PAUSED_TEXT, /仍然可以查看/);
 });
 
 // ---------- 用語：不能讓人覺得是投資建議 ----------

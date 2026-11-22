@@ -443,6 +443,7 @@ async function refresh() {
     state = { session: null, profile: null, rules: [], notifications: [] };
     byId("my-rules").hidden = true;
     byId("my-alerts").hidden = true;
+    if (window.FxFlags) window.FxFlags.clear();
     if (window.FxTrips) window.FxTrips.hide();
     renderAccount();
     notify(publicList, false);
@@ -459,11 +460,16 @@ async function refresh() {
     return;
   }
   if (!exists) return accountGone();
+  // feature flags（flags.js）：先問完再畫，避免新功能先出現再消失
+  if (window.FxFlags) await window.FxFlags.load(client);
   renderAccount();
   renderRules();
   renderNotifications();
   notify(personalCurrencies(publicList, state.rules, state.profile), true);
-  if (window.FxTrips) await window.FxTrips.show(client, publicList, bankCalendar);
+  if (window.FxTrips) {
+    const tripPlan = window.FxFlags ? window.FxFlags.isOn("trip_plan") : true;
+    await window.FxTrips.show(client, publicList, bankCalendar, tripPlan);
+  }
 }
 
 // ---------- 我的提醒 ----------

@@ -76,7 +76,7 @@ jobs:
       - name: Assemble site
         run: |
           mkdir _site
-          cp -r site/index.html site/style.css site/app.js site/trips.js site/account.js site/vendor \
+          cp -r site/index.html site/style.css site/app.js site/flags.js site/trips.js site/account.js site/vendor \
             site/data.json site/history site/unsubscribe.html site/unsubscribe.js site/privacy.html _site/
           find _site -type f | sort
 

@@ -5,6 +5,16 @@ const assert = require("node:assert/strict");
 const a = require("../account.js");
 const app = require("../app.js");
 
+test("quick targets use valid quote ticks, with no duplicate or misleading low-rate options", () => {
+  assert.deepEqual(a.quickTargets("0.2119"), ["0.2108", "0.2098", "0.2077"]);
+  assert.deepEqual(a.quickTargets("0.0015"), []);
+  assert.deepEqual(a.quickTargets("0.0050"), ["0.0049"]);
+  assert.deepEqual(a.quickTargets("0.00015"), []);
+  assert.deepEqual(a.quickTargets("0"), []);
+  assert.deepEqual(a.quickTargets(null), []);
+  assert.ok(a.quickTargets("33.3673").every((value) => !a.validateTarget(value).error));
+});
+
 const M = (s) => a.parseDec(s);
 
 // ---------- 小數 ----------

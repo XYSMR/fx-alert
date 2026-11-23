@@ -330,6 +330,7 @@
   let tCal = makeCalendar(null);
   let tData = { trips: [], exchanges: [], notices: [] };
   let tEnabled = true; // trip_plan flag（flags.js）
+  let tLoadVersion = 0;
 
   function th(tag, attrs = {}, ...children) {
     const node = document.createElement(tag);
@@ -373,17 +374,24 @@
     ]);
     const err = t.error || e.error || n.error;
     if (err) throw err;
-    tData = { trips: t.data ?? [], exchanges: e.data ?? [], notices: n.data ?? [] };
+    return { trips: t.data ?? [], exchanges: e.data ?? [], notices: n.data ?? [] };
   }
 
   async function reload(message) {
+    if (!tClient) return;
+    const version = ++tLoadVersion;
     try {
-      await loadTrips();
+      const data = await loadTrips();
+      if (version !== tLoadVersion) return;
+      tData = data;
     } catch (err) {
+      if (version !== tLoadVersion) return;
       if (tablesMissing(err)) {
         trip$("my-trips").hidden = true;
         return;
       }
+      trip$("my-trips").hidden = false;
+      trip$("my-trips-body").replaceChildren();
       tSay("讀不到你的旅程，請重新整理頁面", "error");
       return;
     }
@@ -444,7 +452,7 @@
       if (error) return tSay(tripErrorMessage(error), "error");
       await reload(`已建立${n.value ?? nameOf(select.value)}的旅程`);
     };
-    return th("form", { class: "rule add", id: "trip-add-form", onsubmit: submit },
+    return th("form", { class: "rule add", id: "trip-add-form", "data-flag": "trip_plan", onsubmit: submit },
       th("strong", {}, "＋ 新增旅程"),
       th("label", { class: "field" }, th("span", {}, "幣別"), select),
       th("label", { class: "field" }, th("span", {}, "出發日"), dep),
@@ -474,7 +482,7 @@
       if (error) return tSay(tripErrorMessage(error), "error");
       await reload(`已記錄換了 ${formatAmount(a.cents)} ${nameOf(trip.currency)}`);
     };
-    return th("form", { class: "rule-main trip-exchange", onsubmit: submit },
+    return th("form", { class: "rule-main trip-exchange", "data-flag": "trip_plan", onsubmit: submit },
       th("label", { class: "field" }, th("span", {}, "這次換了多少"), amount),
       th("label", { class: "field" }, th("span", {}, "匯率"), rate),
       th("label", { class: "field" }, th("span", {}, "日期"), on),
@@ -500,7 +508,9 @@
           th("td", {}, formatAmount(amountOf(x.amount))),
           th("td", {}, x.rate === null ? "—" : String(x.rate)),
           readonly ? null
-            : th("td", {}, th("button", { type: "button", class: "link danger", onclick: remove(x) }, "刪除")))))));
+            : th("td", {}, th("button", {
+                type: "button", class: "link danger", "data-flag": "trip_plan", onclick: remove(x),
+              }, "刪除")))))));
   }
 
   function editForm(trip) {
@@ -526,7 +536,7 @@
       if (error) return tSay(tripErrorMessage(error), "error");
       await reload("已刪除旅程");
     };
-    return th("details", { class: "advanced" },
+    return th("details", { class: "advanced", "data-flag": "trip_plan" },
       th("summary", {}, "修改或刪除"),
       th("form", { class: "rule-main", onsubmit: save },
         th("label", { class: "field" }, th("span", {}, "需要的外幣金額"), amount),
@@ -586,8 +596,8 @@
     const readonly = mode === "readonly";
     trip$("my-trips").hidden = false;
     const parts = [
-      readonly ? th("p", { class: "hint", role: "status" }, PAUSED_TEXT) : null,
-      th("p", { class: "hint" },
+      readonly ? th("p", { class: "hint trip-readonly", role: "status" }, PAUSED_TEXT) : null,
+      readonly ? null : th("p", { class: "hint" },
         "輸入出發日和需要的外幣金額，系統依「近 30 天的價格」和「距離出發的天數」寄 Email 提醒，" +
         "可以記錄已經換了多少，剩下的繼續追蹤。只在銀行營業日寄信。"),
       th("p", { class: "disclaimer" }, `※ ${TRIP_DISCLAIMER}。實際匯率以兆豐銀行公告為準。`),
@@ -609,6 +619,7 @@
   }
 
   function hide() {
+    tLoadVersion++;
     tClient = null;
     tData = { trips: [], exchanges: [], notices: [] };
     tEnabled = true;

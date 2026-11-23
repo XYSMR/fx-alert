@@ -166,6 +166,19 @@ function suggestTarget(rate) {
   return t > 0n ? formatPrice(t) : null;
 }
 
+/** 將百分比折算成有效報價，略過取整後重複或等於現價的選項。 */
+function quickTargets(rate) {
+  const quote = parseDec(rate);
+  if (quote === null || quote <= TICK || quote % TICK !== 0n) return [];
+  const targets = new Set();
+  for (const basisPoints of [50n, 100n, 200n]) {
+    const ticks = (quote / TICK * (10000n - basisPoints) + 5000n) / 10000n;
+    const value = formatPrice(ticks * TICK);
+    if (ticks * TICK < quote && !validateTarget(value).error) targets.add(value);
+  }
+  return [...targets];
+}
+
 /**
  * 越南盾、印尼盾這種很小的匯率：一個報價單位 0.0001 就佔現價好幾 %，目標價只能一格一格設。
  * 一格 ≥ 現價的 1% 時回傳說明，其他幣別回傳 null。
@@ -438,6 +451,8 @@ async function loadMine() {
   return true;
 }
 
+let flagRequest = Promise.resolve();
+
 async function refresh() {
   if (!state.session) {
     state = { session: null, profile: null, rules: [], notifications: [] };
@@ -449,25 +464,36 @@ async function refresh() {
     notify(publicList, false);
     return;
   }
+  const userId = state.session.user.id;
   let exists;
   try {
     exists = await loadMine();
   } catch {
+    if (state.session?.user.id !== userId) return;
     renderAccount();
     byId("my-rules").hidden = false;
     byId("my-rules-body").replaceChildren();
     say("讀不到你的提醒設定，請重新整理頁面", "error");
     return;
   }
+  if (state.session?.user.id !== userId) return;
   if (!exists) return accountGone();
   // feature flags（flags.js）：先問完再畫，避免新功能先出現再消失
-  if (window.FxFlags) await window.FxFlags.load(client);
+  if (window.FxFlags) {
+    flagRequest = flagRequest.then(async () => {
+      if (state.session?.user.id !== userId) return;
+      await window.FxFlags.load(client);
+      if (state.session?.user.id !== userId) window.FxFlags.clear();
+    });
+    await flagRequest;
+  }
+  if (state.session?.user.id !== userId) return;
   renderAccount();
   renderRules();
   renderNotifications();
   notify(personalCurrencies(publicList, state.rules, state.profile), true);
   if (window.FxTrips) {
-    const tripPlan = window.FxFlags ? window.FxFlags.isOn("trip_plan") : true;
+    const tripPlan = window.FxFlags?.isOn("trip_plan") === true;
     await window.FxTrips.show(client, publicList, bankCalendar, tripPlan);
   }
 }
@@ -626,8 +652,16 @@ function addForm() {
     "aria-label": "目標價", "aria-describedby": "add-hint",
   });
   const hint = h("p", { class: "hint", id: "add-hint" });
+  const shortcuts = h("div", { class: "quick-targets", "data-flag": "quick_target" });
+  let lastCurrency = select.value;
+  let prefilledValue = null;
   const updateHint = () => {
     const code = select.value;
+    if (code !== lastCurrency) {
+      if (target.value === prefilledValue) target.value = "";
+      prefilledValue = null;
+      lastCurrency = code;
+    }
     const name = NAMES[code] ?? code;
     const rate = rateOf(code);
     const suggest = suggestTarget(rate);
@@ -636,6 +670,20 @@ function addForm() {
     hint.replaceChildren(
       rate ? `${name}現在 ${rate}。匯率跌到你的目標或更低時，會寄一封 Email 給你。` : "",
       tick ? h("span", { class: "tick-hint" }, ` ${tick}`) : "");
+    const values = quickTargets(rate);
+    shortcuts.replaceChildren(
+      h("p", { class: "hint" }, values.length
+        ? "快速填入目標價。你可以修改，按下「新增」才會儲存。"
+        : "目前沒有符合報價精度的快捷值。你仍可手動輸入目標價。"),
+      ...values.map((value) => h("button", {
+        type: "button", "aria-label": `填入 ${value}`,
+        onclick: () => {
+          prefilledValue = value;
+          target.value = value;
+          target.focus();
+        },
+      }, value)),
+    );
   };
   select.addEventListener("change", updateHint);
   updateHint();
@@ -655,6 +703,7 @@ function addForm() {
     h("label", { class: "field" }, h("span", {}, "幣別"), select),
     h("label", { class: "field" }, h("span", {}, "你的目標"), target),
     hint,
+    shortcuts,
     h("button", { type: "submit", class: "primary" }, "新增"));
 }
 
@@ -792,7 +841,13 @@ async function start(auth, currencies, onChange, calendar = null) {
       notice("登入已失效，請重新登入");
     }
     state.session = session;
-    if (changed) setTimeout(refresh, 0); // 不在 callback 裡呼叫 Supabase（官方建議）
+    if (changed) {
+      window.FxFlags?.clear();
+      window.FxTrips?.hide();
+      byId("my-rules").hidden = true;
+      byId("my-alerts").hidden = true;
+      setTimeout(refresh, 0); // 不在 callback 裡呼叫 Supabase（官方建議）
+    }
   });
 }
 
@@ -801,7 +856,7 @@ if (typeof module !== "undefined" && module.exports) {
     parseDec, formatDec, formatPrice, decimalsOf, autoBuffer, maxBuffer, effectiveBuffer,
     rearmQuote, rearmText,
     validateTarget, validateBuffer, farFromRateMessage, availableCurrencies, distancePct,
-    addOptions, defaultAddCode, sortRules, suggestTarget, tickHint,
+    addOptions, defaultAddCode, sortRules, suggestTarget, tickHint, quickTargets,
     windowOptions, notifyWindow, windowLabel, inWindow, windowNote,
     personalCurrencies, ruleStatusText, errorMessage, normalizeConfirm, isConfirmed,
     isAccountGone, deleteErrorMessage, CONFIRM_TEXT,

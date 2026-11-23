@@ -149,6 +149,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .rule { padding: 14px 0; border-bottom: 1px solid var(--border); display: grid; gap: 8px; }
 .rule.add { border-bottom: 0; display: flex; flex-wrap: wrap; align-items: end; gap: 8px 14px; }
 .rule.add > strong { flex-basis: 100%; }
+.quick-targets { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; }
+.quick-targets .hint { flex-basis: 100%; }
+.quick-targets button {
+  font: inherit; font-variant-numeric: tabular-nums; color: var(--blue);
+  background: transparent; border: 1px solid var(--blue); border-radius: 8px;
+  padding: 8px 12px; min-height: 44px; cursor: pointer;
+}
+.trip-readonly { border-inline-start: 3px solid var(--blue); padding: 8px 12px; }
 .rule-main { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 16px; }
 .rule-name { font-size: 1.1rem; min-width: 3em; }
 .field { display: grid; gap: 2px; font-size: .9rem; color: var(--muted); }

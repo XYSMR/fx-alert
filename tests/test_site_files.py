@@ -17,6 +17,18 @@ def test_index_never_loads_supabase_js_statically():
     assert not [s for s in srcs if "supabase" in s.lower()]
     assert srcs.index("config.js") < srcs.index("account.js") < srcs.index("app.js")
     assert srcs.index("trips.js") < srcs.index("account.js")
+    # flags.js 要在 account.js 之前載入（account.js 登入後呼叫 FxFlags.load）
+    assert srcs.index("flags.js") < srcs.index("account.js")
+
+
+def test_every_local_script_is_deployed():
+    """index.html 載入的每個 js 都要在 deploy-pages 的 Assemble site 清單裡，不然正式站會 404。"""
+    workflow = (SITE.parent / ".github/workflows/deploy-pages.yml").read_text(encoding="utf-8")
+    for src in _script_srcs(INDEX):
+        if src == "config.js":  # deploy-pages 另外產生
+            continue
+        target = "site/vendor" if src.startswith("vendor/") else f"site/{src}"
+        assert target in workflow, src
 
 
 def test_account_js_loads_supabase_only_inside_start():

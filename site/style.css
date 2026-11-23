@@ -1,6 +1,11 @@
 /* hidden 屬性一定要隱藏（.conv div 等元件有自己的 display，會蓋過瀏覽器預設） */
 [hidden] { display: none !important; }
 
+/* feature flags（flags.js）：<html> 上這個 flag 不是 on，就隱藏 data-flag="<flag>" 的元素。
+   還沒問完、沒登入、問不到都算「不是 on」，所以新功能預設看不到。 */
+html:not([data-flag-trip_plan="on"]) [data-flag="trip_plan"],
+html:not([data-flag-quick_target="on"]) [data-flag="quick_target"] { display: none !important; }
+
 :root {
   --bg: #f6f7f9;
   --surface: #ffffff;

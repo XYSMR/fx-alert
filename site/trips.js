@@ -1,5 +1,7 @@
 // 出國換匯計畫：建立旅程、旅程進度、記錄已經換了多少。
 // - 登入後由 account.js 呼叫 FxTrips.show()，登出時 FxTrips.hide()。
+// - feature flag trip_plan（flags.js）關閉時：沒有旅程的人看不到這個區塊；有旅程的人只能看、不能改
+//   （和資料庫 20261123000300 的 restrictive policy 一致，直接打 API 也會被擋）。
 // - 能讀寫什麼由資料庫的 RLS 決定（只能碰自己的旅程）；寄提醒是排程的工作，這裡只顯示。
 // - 提醒日期的算法和 Python 的 src/fx_alert/trip_rules.py schedule() 一樣，
 //   site/tests/trips.test.js 用 tests/fixtures/trip_schedules.json 逐日比對。
@@ -13,6 +15,7 @@
 (function () {
 
   const TRIP_DISCLAIMER = "僅供參考，不保證未來匯率走勢";
+  const PAUSED_TEXT = "出國換匯計畫目前暫停新增和修改，已建立的旅程仍然可以查看。";
   const MAX_TRIPS = 5;
   const MAX_EXCHANGES = 50;
   const CENTS = 100n;
@@ -284,8 +287,19 @@
     const code = err && err.code;
     if (code === "23514") return "數值不符合規則，請檢查金額和日期";
     if (code === "23503") return "找不到這趟旅程，請重新整理頁面";
+    // trip_plan 在頁面打開後才被關掉：資料庫的 restrictive policy 擋下寫入
+    if (code === "42501" && msg.includes("row-level security")) return `${PAUSED_TEXT}請重新整理頁面。`;
     if (code === "42501" || code === "PGRST301") return "沒有權限，請重新登入";
     return "儲存失敗，請稍後再試";
+  }
+
+  /**
+   * trip_plan flag 關閉時怎麼顯示：
+   *   開啟 → "full"；關閉但已經有旅程 → "readonly"（只能看）；關閉又沒有旅程 → "hidden"
+   */
+  function tripMode(enabled, tripCount) {
+    if (enabled) return "full";
+    return tripCount > 0 ? "readonly" : "hidden";
   }
 
   /** 資料庫還沒有換匯計畫的表（migration 還沒套用）：整個區塊不顯示 */
@@ -315,6 +329,7 @@
   let tList = [];
   let tCal = makeCalendar(null);
   let tData = { trips: [], exchanges: [], notices: [] };
+  let tEnabled = true; // trip_plan flag（flags.js）
 
   function th(tag, attrs = {}, ...children) {
     const node = document.createElement(tag);
@@ -466,7 +481,7 @@
       th("button", { type: "submit", class: "primary" }, "記錄"));
   }
 
-  function exchangeList(trip) {
+  function exchangeList(trip, readonly) {
     const rows = tData.exchanges.filter((x) => x.trip_id === trip.id);
     if (!rows.length) return null;
     const remove = (x) => async () => {
@@ -479,12 +494,13 @@
       th("summary", {}, `換匯紀錄（${rows.length} 筆）`),
       th("table", { class: "alerts" },
         th("thead", {}, th("tr", {}, th("th", { scope: "col" }, "日期"), th("th", { scope: "col" }, "金額"),
-          th("th", { scope: "col" }, "匯率"), th("th", { scope: "col" }, ""))),
+          th("th", { scope: "col" }, "匯率"), readonly ? null : th("th", { scope: "col" }, ""))),
         th("tbody", {}, ...rows.map((x) => th("tr", {},
           th("td", {}, x.exchanged_on),
           th("td", {}, formatAmount(amountOf(x.amount))),
           th("td", {}, x.rate === null ? "—" : String(x.rate)),
-          th("td", {}, th("button", { type: "button", class: "link danger", onclick: remove(x) }, "刪除")))))));
+          readonly ? null
+            : th("td", {}, th("button", { type: "button", class: "link danger", onclick: remove(x) }, "刪除")))))));
   }
 
   function editForm(trip) {
@@ -520,7 +536,7 @@
       th("button", { type: "button", class: "link danger", onclick: remove }, "刪除這趟旅程"));
   }
 
-  function tripCard(trip, today) {
+  function tripCard(trip, today, readonly) {
     const sch = schedule(trip.departure, tCal);
     const p = progress(trip);
     const cur = currencyOf(trip.currency);
@@ -553,30 +569,40 @@
           stepLabel[s.state] ? th("span", { class: "sub" }, `（${stepLabel[s.state]}）`) : null))),
       notices.length ? th("p", { class: "hint" }, "最近的提醒：",
         notices.map((x) => `${shortDate(x.sent_on)} ${KIND_LABELS[x.kind] ?? x.kind}`).join("、")) : null,
-      departed ? null : exchangeForm(trip, today),
-      exchangeList(trip),
-      editForm(trip));
+      departed || readonly ? null : exchangeForm(trip, today),
+      exchangeList(trip, readonly),
+      readonly ? null : editForm(trip));
   }
 
   function render() {
     const today = taipeiToday();
     const trips = sortTrips(tData.trips, today);
+    const mode = tripMode(tEnabled, trips.length);
+    if (mode === "hidden") {
+      trip$("my-trips").hidden = true;
+      trip$("my-trips-body").replaceChildren();
+      return;
+    }
+    const readonly = mode === "readonly";
     trip$("my-trips").hidden = false;
     const parts = [
+      readonly ? th("p", { class: "hint", role: "status" }, PAUSED_TEXT) : null,
       th("p", { class: "hint" },
         "輸入出發日和需要的外幣金額，系統依「近 30 天的價格」和「距離出發的天數」寄 Email 提醒，" +
         "可以記錄已經換了多少，剩下的繼續追蹤。只在銀行營業日寄信。"),
       th("p", { class: "disclaimer" }, `※ ${TRIP_DISCLAIMER}。實際匯率以兆豐銀行公告為準。`),
-      ...trips.map((t) => tripCard(t, today)),
+      ...trips.map((t) => tripCard(t, today, readonly)),
       trips.length ? null : th("p", { class: "empty" }, "還沒有旅程。"),
-      addTripForm(today),
+      readonly ? null : addTripForm(today),
     ];
     // replaceChildren 會把 null 當成文字「null」，先拿掉
     trip$("my-trips-body").replaceChildren(...parts.filter((x) => x !== null));
   }
 
-  async function show(client, currencies, calendarJson) {
+  /** enabled：trip_plan flag 對這個人是否開啟（account.js 從 FxFlags 傳進來；沒傳 = 開啟） */
+  async function show(client, currencies, calendarJson, enabled = true) {
     tClient = client;
+    tEnabled = enabled !== false;
     tList = currencies;
     tCal = makeCalendar(calendarJson);
     await reload();
@@ -585,12 +611,13 @@
   function hide() {
     tClient = null;
     tData = { trips: [], exchanges: [], notices: [] };
+    tEnabled = true;
     const box = trip$("my-trips");
     if (box) box.hidden = true;
   }
 
   const exported = {
-    TRIP_DISCLAIMER, KIND_LABELS, MAX_TRIPS,
+    TRIP_DISCLAIMER, PAUSED_TEXT, KIND_LABELS, MAX_TRIPS, tripMode,
     dayMs, addDays, daysBetween, taipeiToday, shortDate,
     makeCalendar, schedule, phase, milestones, phaseText, previewSteps, previewPriceNote, previewLines,
     parseAmount, formatAmount, amountOf, validateAmount, validateRate, validateDeparture, validateName,

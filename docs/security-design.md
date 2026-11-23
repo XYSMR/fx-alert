@@ -60,13 +60,21 @@ flowchart LR
 | `quick_target` | ✗ | ✓ | ✗ | ✓ | ✓ |
 | Change roles / flags | ✗ | ✗ | ✗ | ✗ | `service_role` only |
 
-Planned server-side check once the Operator's `is_feature_on()` exists:
+Server-side check (migration `20261123000200_trips_flag_policy.sql`, uses the Operator's `is_feature_on()`):
 
 ```sql
-create policy "trip_plan only when flag is on" on public.trips
-  for insert to authenticated
-  with check (user_id = (select auth.uid()) and public.is_feature_on('trip_plan'));
+create policy "trips only when trip_plan is on" on public.trips
+  as restrictive for insert to authenticated
+  with check ((select public.is_feature_on('trip_plan')));
 ```
+
+It must be **restrictive**. `trips` already has the permissive policy "insert own trips", and PostgreSQL combines permissive policies with **OR**, so a second permissive policy would not block anything (`tests/db/test_feature_flags.py::test_permissive_policy_does_not_block`). A restrictive policy is combined with **AND**: the row must belong to the user **and** `trip_plan` must be on for that user. When the flag is off the feature becomes **read-only**, matching the Designer's read-only UI (migration `20261123000300_trip_plan_readonly.sql`): five more restrictive policies block update and delete on `trips` and insert, update and delete on `trip_exchanges`. Reads still work, and the scheduler (`service_role`) and account deletion (foreign-key cascade) are not affected.
+
+| Write when `trip_plan` is off | Database result | HTTP (PostgREST) |
+|---|---|---|
+| Insert trip / exchange | error 42501 | 403 |
+| Update trip / exchange | error 42501 (check is in `WITH CHECK`) | 403 |
+| Delete trip / exchange | 0 rows deleted, data unchanged (`USING` hides the row) | 200/204, empty result |
 
 ## 3. Software Composition Analysis (Dependabot)
 
@@ -92,11 +100,13 @@ Controls: secret scanning and push protection are enabled; CI fails if public fi
 
 ### Risk found: teammates and repository secrets
 
-Collaborators on a **personal** repository always get **Write** access (the Triage role exists only in organizations). With Write, anyone can push a branch with a modified workflow, and that workflow can read **repository** secrets.
+Collaborators on a **personal** repository always get **Write** access (the Triage role exists only in organizations). With Write, anyone can push a branch with a modified workflow, and that workflow can read **repository** secrets. Decision for the 4-person team:
 
-* **Accepted for now:** teammates need to push branches (for example `feat/feature-flags`), and they are trusted classmates. No pushed branch changes `.github/workflows/`.
-* **Mitigated now:** the ruleset on `main` requires a pull request with 1 approval (the repository admin can bypass for their own changes) and all CI checks, so a modified workflow cannot reach `main` without review; `production` only deploys from `main`.
-* **Planned (PR #47):** move every secret into environments limited to `main` (`production-runtime`, `staging-runtime`), then rotate the production secret key and the Gmail app password.
+* Teammates stay collaborators so they can push branches (for example `feat/feature-flags`) and open pull requests.
+* All secrets moved from repository secrets into environments that only accept `main`; a workflow on any other branch (or a pull request) cannot read them. Repository secrets are now empty.
+* Ruleset on `main`: pull request required, 1 approval required (the repository admin can bypass only through a pull request), all CI checks must pass, no force push or deletion. A teammate therefore cannot merge a modified workflow into `main` without the maintainer's review.
+* Because teammates had Write access before the move, the production and staging secret keys, the Gmail app password and both unsubscribe secrets were rotated, and the old keys revoked.
+* Accepted risk: `STAGING_DB_URL` (environment `staging`) is not branch-limited because migrations are tested on PR branches; it only reaches the staging project.
 
 ## 5. Built now vs planned
 
@@ -106,9 +116,9 @@ Collaborators on a **personal** repository always get **Write** access (the Tria
 | RLS on every public table | Built |
 | Environments `staging` / `production` with approval | Built |
 | Secret scanning, push protection, CI secret check | Built |
-| `profiles.role` + `current_user_role()` + tests | Built (this PR) |
-| Dependabot config | Built (this PR) |
+| `profiles.role` + `current_user_role()` + tests | Built |
+| Dependabot config | Built |
 | Dependabot alerts / security updates, CodeQL, private vulnerability reporting, `SECURITY.md` | Built |
 | Ruleset on `main` (PR + 1 approval + 6 checks) | Built |
-| RLS on `trips` gated by `trip_plan` flag | Planned (after the Operator's flag table) |
+| Restrictive RLS: `trip_plan` off = read-only for trips and exchanges | Built (`tests/db/test_trips_flag_policy.py`) |
 | All secrets in branch-limited environments | Built |

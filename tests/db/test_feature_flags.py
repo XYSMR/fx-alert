@@ -190,6 +190,8 @@ def add_trip_sql(db) -> tuple[str, tuple]:
 
 def test_permissive_policy_does_not_block(db, alice):
     sql, params = add_trip_sql(db)
+    # 正式的 restrictive policy（20261123000200）先在交易裡拿掉，只留 permissive 示範
+    db.run('drop policy "trips only when trip_plan is on" on public.trips')
     db.run(
         "create policy flag_permissive on public.trips for insert to authenticated "
         "with check (public.is_feature_on('trip_plan'))"

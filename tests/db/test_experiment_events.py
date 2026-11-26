@@ -60,6 +60,14 @@ def test_unknown_event_or_flag_rejected(db, alice):
     db.fails(INSERT, ("trip_created", "dark_mode"), sqlstate=CHECK)
 
 
+def test_event_must_match_its_experiment(db, alice):
+    """H1 的事件不能被記到 H2（反之亦然），否則指標會算錯。"""
+    db.as_user(alice)
+    db.fails(INSERT, ("trip_created", "quick_target"), sqlstate=CHECK)
+    db.fails(INSERT, ("quick_target_clicked", "trip_plan"), sqlstate=CHECK)
+    db.fails(INSERT, ("alert_saved", "trip_plan"), sqlstate=CHECK)
+
+
 def test_variant_is_decided_by_server(db, alice):
     """瀏覽器不能指定 variant：flag 開 → on；flag 關 → off。"""
     set_flag(db, "quick_target", enabled=True)

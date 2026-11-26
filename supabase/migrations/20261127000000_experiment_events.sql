@@ -23,7 +23,12 @@ create table public.experiment_events (
   variant    text not null default 'off'
              constraint experiment_events_variant_valid
              check (variant in ('on', 'off')),
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  -- 事件要和實驗配對：H1 的事件不能被算進 H2（review by @Hank0903）
+  constraint experiment_events_event_flag_pair check (
+    (event = 'trip_created' and flag = 'trip_plan')
+    or (event in ('quick_target_clicked', 'alert_saved') and flag = 'quick_target')
+  )
 );
 
 comment on table public.experiment_events is

@@ -4,6 +4,11 @@
 --   H2 quick_target  ：有沒有按一鍵目標價、多快存下第一個提醒 → quick_target_clicked、alert_saved
 --   兩者的分母        ：有多少人看到（登入後載入頁面記一次）   → exposed（ON、OFF 兩組都記）
 --
+-- 保留原始資料、不擋重複：同一個人可以有很多筆。
+--   ⚠ 算指標一律用「不重複的使用者數」（count(distinct user_id)）和「每人的第一筆」，
+--     不要直接 count(*)。
+-- 前端只用 .insert(...)，不要接 .select()：使用者沒有讀取權限，接了會 permission denied。
+--
 -- 權限（RLS）：
 --   * 使用者只能「新增自己的事件」，而且只能填 event、flag 兩欄；
 --     不能讀、不能改、不能刪（指標只有 service_role 在 SQL Editor / 報表裡算）。

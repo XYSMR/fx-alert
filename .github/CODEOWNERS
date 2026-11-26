@@ -1,0 +1,24 @@
+# Paths are rooted at the repository. Later matches take precedence.
+/.github/ @Chien0509
+/.github/dependabot.yml @XYSMR
+/SECURITY.md @XYSMR
+/docs/security-design.md @XYSMR
+/src/fx_alert/ @XYSMR
+/supabase/ @XYSMR
+/config.yaml @XYSMR
+/pyproject.toml @XYSMR
+/site/ @fanyuzhenfu
+
+# Feature flag implementations and their database configuration.
+/site/flags.js @Hank0903
+/src/fx_alert/flags.py @Hank0903
+/supabase/staging/feature_flags*.sql @XYSMR @Hank0903
+/supabase/migrations/*_feature_flags.sql @XYSMR @Hank0903
+/supabase/migrations/*_quick_target_default_off.sql @XYSMR @Hank0903
+
+# QA owns test suites. Security and QA share database and edge-function tests.
+/tests/ @Hank0903
+/site/tests/ @Hank0903
+/site/samples/ @Hank0903
+/tests/db/ @XYSMR @Hank0903
+/supabase/functions/**/*.test.ts @XYSMR @Hank0903

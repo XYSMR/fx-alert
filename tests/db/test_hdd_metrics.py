@@ -1,5 +1,7 @@
 """HDD 指標報表 supabase/reports/hdd_metrics.sql（issue #59）。
 
+分母和組別看每人第一筆 exposed 事件（PR #54 review 後加入的事件）。
+
 報表在 SQL Editor 以 postgres 身分執行；這裡放入測試資料，逐列核對算出來的數字和 PASS / FAIL。
 測試在同一個交易裡執行，now() 固定，所以時間差都用「把 created_at 往前調」來做。
 """
@@ -29,14 +31,19 @@ def set_flag(db, flag: str, *, enabled: bool = True, rollout: int = 100) -> None
     )
 
 
-def users(db, n: int, prefix: str = "u") -> list:
-    return [db.signup(f"{prefix}{i}@example.com") for i in range(n)]
-
-
 def event(db, user, name: str, flag: str, *, times: int = 1) -> None:
     db.as_user(user)
     for _ in range(times):
         db.run("insert into public.experiment_events (event, flag) values (%s, %s)", (name, flag))
+
+
+def users(db, n: int, prefix: str = "u", *, exposed: str | None = None) -> list:
+    """註冊 n 個使用者；exposed 給 flag 時，每人先記一筆 exposed（打開頁面）。"""
+    us = [db.signup(f"{prefix}{i}@example.com") for i in range(n)]
+    if exposed:
+        for u in us:
+            event(db, u, "exposed", exposed)
+    return us
 
 
 def signed_up_seconds_before_now(db, user, seconds: int) -> None:
@@ -82,7 +89,7 @@ def test_report_is_read_only():
 
 def test_h1_counts_distinct_users_not_rows(db):
     set_flag(db, "trip_plan", rollout=100)
-    us = users(db, 10)
+    us = users(db, 10, exposed="trip_plan")
     for u in us[:3]:
         event(db, u, "trip_created", "trip_plan")
     event(db, us[0], "trip_created", "trip_plan", times=20)  # 同一人重複送，不灌水
@@ -91,7 +98,7 @@ def test_h1_counts_distinct_users_not_rows(db):
 
 def test_h1_below_threshold_fails(db):
     set_flag(db, "trip_plan", rollout=100)
-    us = users(db, 10)
+    us = users(db, 10, exposed="trip_plan")
     for u in us[:2]:
         event(db, u, "trip_created", "trip_plan")
     assert report(db)[(H1, "on")] == ("2 / 10 = 20.0%", "FAIL")
@@ -99,7 +106,7 @@ def test_h1_below_threshold_fails(db):
 
 def test_h1_needs_ten_exposed_users(db):
     set_flag(db, "trip_plan", rollout=100)
-    us = users(db, 9)
+    us = users(db, 9, exposed="trip_plan")
     for u in us:
         event(db, u, "trip_created", "trip_plan")
     assert report(db)[(H1, "on")][1] == "NO DATA"
@@ -107,18 +114,40 @@ def test_h1_needs_ten_exposed_users(db):
 
 def test_h1_kill_switch_moves_everyone_to_off(db):
     set_flag(db, "trip_plan", enabled=False, rollout=100)
-    users(db, 4)
+    users(db, 4, exposed="trip_plan")
     r = report(db)
     assert r[(H1, "on")] == ("0 / 0", "NO DATA")
     assert r[(H1, "off")] == ("0 / 4 = 0.0%", "INFO")
 
 
+def test_users_who_never_opened_the_page_are_not_in_the_denominator(db):
+    set_flag(db, "trip_plan", rollout=100)
+    seen = users(db, 10, "seen", exposed="trip_plan")
+    users(db, 30, "never")  # 沒有 exposed 事件
+    for u in seen[:3]:
+        event(db, u, "trip_created", "trip_plan")
+    assert report(db)[(H1, "on")] == ("3 / 10 = 30.0%", "PASS")
+
+
+def test_group_is_fixed_when_first_exposed(db):
+    """先在 OFF 組被曝光，之後 rollout 改成 100%：仍算在 OFF 組（看第一筆 exposed）。"""
+    set_flag(db, "trip_plan", enabled=False)
+    us = users(db, 4, exposed="trip_plan")
+    set_flag(db, "trip_plan", rollout=100)
+    for u in us:
+        event(db, u, "exposed", "trip_plan")
+        event(db, u, "trip_created", "trip_plan")
+    r = report(db)
+    assert r[(H1, "off")] == ("4 / 4 = 100.0%", "INFO")
+    assert r[(H1, "on")] == ("0 / 0", "NO DATA")
+
+
 def test_events_before_since_are_ignored(db):
     set_flag(db, "trip_plan", rollout=100)
-    us = users(db, 10)
+    us = users(db, 10, exposed="trip_plan")
     for u in us[:5]:
         event(db, u, "trip_created", "trip_plan")
-    assert report(db, since="2999-01-01")[(H1, "on")] == ("0 / 10 = 0.0%", "FAIL")
+    assert report(db, since="2999-01-01")[(H1, "on")] == ("0 / 0", "NO DATA")
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +157,7 @@ def test_events_before_since_are_ignored(db):
 
 def test_h2_median_of_first_alert_per_user(db):
     set_flag(db, "quick_target", rollout=100)
-    us = users(db, 5)
+    us = users(db, 5, exposed="quick_target")
     for u, secs in zip(us, (10, 20, 30, 40, 200), strict=True):
         signed_up_seconds_before_now(db, u, secs)
         event(db, u, "alert_saved", "quick_target")
@@ -137,8 +166,8 @@ def test_h2_median_of_first_alert_per_user(db):
     db.as_postgres()
     db.run(
         "update public.experiment_events set created_at = now() + interval '1 hour' "
-        "where user_id = %s and id > (select min(id) from public.experiment_events "
-        "where user_id = %s)",
+        "where user_id = %s and event = 'alert_saved' and id > (select min(id) "
+        "from public.experiment_events where user_id = %s and event = 'alert_saved')",
         (us[2], us[2]),
     )
     assert report(db)[(H2, "on")] == ("30.0 s (5 of 5 new users)", "PASS")
@@ -146,7 +175,7 @@ def test_h2_median_of_first_alert_per_user(db):
 
 def test_h2_slow_median_fails(db):
     set_flag(db, "quick_target", rollout=100)
-    for u in users(db, 5):
+    for u in users(db, 5, exposed="quick_target"):
         signed_up_seconds_before_now(db, u, 90)
         event(db, u, "alert_saved", "quick_target")
     assert report(db)[(H2, "on")] == ("90.0 s (5 of 5 new users)", "FAIL")
@@ -154,20 +183,22 @@ def test_h2_slow_median_fails(db):
 
 def test_h2_only_counts_users_who_signed_up_during_the_experiment(db):
     set_flag(db, "quick_target", rollout=100)
-    old = users(db, 3, "old")
+    old = users(db, 3, "old", exposed="quick_target")
     db.as_postgres()
     for u in old:
         db.run("update public.profiles set created_at = '1999-01-01' where user_id = %s", (u,))
-    users(db, 2, "new")
+    users(db, 2, "new", exposed="quick_target")
     assert report(db)[(H2, "on")] == ("- (0 of 2 new users)", "NO DATA")
 
 
 def test_h2_groups_follow_role_and_rollout(db):
-    """rollout 0：只有 beta 在 ON 組，其他人是 OFF 組的對照。"""
+    """rollout 0：只有 beta 在 ON 組，其他人是 OFF 組的對照（組別由伺服器在 exposed 時決定）。"""
     set_flag(db, "quick_target", rollout=0)
     beta, normal = users(db, 2)
     db.as_postgres()
     db.run("update public.profiles set role = 'beta' where user_id = %s", (beta,))
+    for u in (beta, normal):
+        event(db, u, "exposed", "quick_target")
     r = report(db)
     assert r[(H2, "on")][0].endswith("(0 of 1 new users)")
     assert r[(H2, "off")][0].endswith("(0 of 1 new users)")
@@ -203,6 +234,8 @@ def split_groups(db, n_on: int, n_off: int):
     db.as_postgres()
     for u in on:
         db.run("update public.profiles set role = 'beta' where user_id = %s", (u,))
+    for u in on + off:
+        event(db, u, "exposed", "quick_target")
     return on, off
 
 

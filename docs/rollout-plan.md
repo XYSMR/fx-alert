@@ -40,8 +40,9 @@ select set_config('hdd.since', '2026-12-06', false);
 -- 接著貼上 supabase/reports/hdd_metrics.sql 全文執行
 ```
 
-每換一個階段就重設 `hdd.since`：報表用「目前的」flag 設定推算每個人在 ON 還是 OFF 組，
-比例改了以後，舊期間的分組就不準了。
+每換一個階段就重設 `hdd.since`，各階段的指標分開看。
+每個人的組別看他在這個 flag 的第一筆 `exposed` 事件（打開頁面時記錄，variant 由伺服器決定），
+所以 rollout 比例改了以後，之前已經分好的組不會變。
 
 ## 每天看的指標
 
@@ -79,8 +80,8 @@ update public.feature_flags set enabled = false where flag = 'quick_target';
 
 ## 已知限制
 
-- **分組是推算的**：`experiment_events` 只記錄有行動的人，ON 組的分母用和 `is_feature_on()` 相同的規則推算。
-  若之後加入「曝光」事件，報表可以改成直接數（PR #54 review 的提問）。
+- **分母只算打開過頁面的人**：分母是有 `exposed` 事件的使用者（PR #54 review 後加入）。
+  註冊了但沒打開過頁面的人不算進去；前端要在載入頁面時記錄 `exposed`，報表才有分母。
 - **「修改提醒」是估計值**：排程改 `state` 時也會更新 `updated_at`，報表排除和 `state_changed_at` 同時的更新；
   使用者修改後又被排程改過的提醒會被漏算，已刪除的提醒也查不到，所以這個比例只會偏低。
 - **寄信錯誤只看最近一次**：`check_status` 只保留最後一筆，錯誤率的歷史要看 GitHub Actions。

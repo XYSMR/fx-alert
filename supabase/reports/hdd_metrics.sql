@@ -3,16 +3,16 @@
 -- 不是 migration：部署 workflow 不會執行它。
 --
 -- 實驗期間從 hdd.since 起算，沒設定就用 2026-12-06（quick_target 開始 20% rollout）。
--- 換 rollout 階段時重設起點，在同一個查詢分頁先執行：
+-- 換 rollout 階段時重設起點，各階段分開看，在同一個查詢分頁先執行：
 --   select set_config('hdd.since', '2026-12-10', false);
--- 原因：誰在 ON 組是用「目前的」flag 設定推算的，rollout 比例中途改了，舊期間就算不準。
 --
 -- 計算原則
 --   * 只數不重複的使用者，每人每種事件只看第一筆：
 --     experiment_events 允許同一人重複送事件，直接 count(*) 會被灌水（PR #54 review）。
---   * 分組（ON / OFF）：和 public.is_feature_on() 相同的規則推算，
---       enabled 而且（角色在 allowed_roles，或 md5 分桶 < rollout）。
---     experiment_events 只記錄有行動的人；沒行動的人要靠推算才有分母。
+--   * 分母和分組（ON / OFF）：每人在這個 flag 的第一筆 exposed 事件。
+--     exposed 在頁面載入時記一次，ON、OFF 兩組都記；variant 由伺服器寫入時用
+--     is_feature_on() 決定（PR #54），所以 rollout 比例中途改了，之前的分組也不會跑掉。
+--     沒有 exposed 事件的人（還沒打開過頁面）不算進分母。
 --   * H2 只看實驗期間內才註冊的新使用者（profiles.created_at = 第一次登入）。
 --   * result：PASS / FAIL 對照 A10 的假設門檻；INFO 是參考值；NO DATA 是樣本不夠。
 --
@@ -26,21 +26,18 @@ with params as (
   select coalesce(nullif(current_setting('hdd.since', true), ''), '2026-12-06')::timestamptz as since
 ),
 
--- 每個使用者在每個 flag 被分到哪一組（推算，規則同 is_feature_on）
-assignment as (
-  select p.user_id,
-         p.created_at as signed_up_at,
-         f.flag,
-         case
-           when f.enabled
-                and (p.role = any (f.allowed_roles)
-                     or ('x' || substr(md5(f.flag || ':' || p.user_id::text), 1, 8))::bit(32)::bigint % 100
-                        < f.rollout)
-             then 'on'
-           else 'off'
-         end as variant
-    from public.profiles p
-    cross join public.feature_flags f
+-- 每人在每個 flag 的第一筆 exposed：決定分母和組別
+exposure as (
+  select distinct on (e.user_id, e.flag)
+         e.user_id,
+         e.flag,
+         e.variant,
+         p.created_at as signed_up_at
+    from public.experiment_events e
+    join public.profiles p on p.user_id = e.user_id
+    cross join params
+   where e.event = 'exposed' and e.created_at >= params.since
+   order by e.user_id, e.flag, e.created_at, e.id
 ),
 
 -- 每人每種事件的第一筆
@@ -56,7 +53,7 @@ h1 as (
   select a.variant,
          count(*)          as exposed,
          count(fe.user_id) as created
-    from assignment a
+    from exposure a
     left join first_event fe
       on fe.user_id = a.user_id and fe.flag = 'trip_plan' and fe.event = 'trip_created'
    where a.flag = 'trip_plan'
@@ -70,7 +67,7 @@ h2 as (
          percentile_cont(0.5) within group (
            order by extract(epoch from fe.first_at - a.signed_up_at)
          ) filter (where fe.user_id is not null) as median_s
-    from assignment a
+    from exposure a
     cross join params
     left join first_event fe
       on fe.user_id = a.user_id and fe.flag = 'quick_target' and fe.event = 'alert_saved'
@@ -90,7 +87,7 @@ g2 as (
              and (r.state_changed_at is null
                   or r.updated_at > r.state_changed_at + interval '1 second')
          ) as edited
-    from assignment a
+    from exposure a
     cross join params
     join public.alert_rules r on r.user_id = a.user_id and r.created_at >= params.since
    where a.flag = 'quick_target'

@@ -1,5 +1,6 @@
 -- A10 實驗的 HDD 指標報表（A11，issue #59）。
--- 在 Supabase 的 SQL Editor 整段執行（postgres 身分），只讀，不改任何資料。
+-- 在 Supabase 的 SQL Editor 整段執行（postgres 身分）。開頭的 set transaction read only
+-- 讓整段只能讀，不會改到任何資料。
 -- 不是 migration：部署 workflow 不會執行它。
 --
 -- 實驗期間從 hdd.since 起算，沒設定就用 2026-12-06（quick_target 開始 20% rollout）。
@@ -25,6 +26,12 @@
 --   H2 quick_target  ON 組新使用者「第一次登入 → 第一個提醒」中位數 < 60 秒（樣本至少 5 人）
 --   Guardrail H2     ON 組 24 小時內修改提醒的比例不高於 OFF 組
 --   Guardrail H1     最近一次匯率檢查成功、沒有寄信錯誤（錯誤率歷史和執行時間看 GitHub Actions）
+
+-- SQL Editor 以 postgres 身分執行（不受 RLS 限制）：整段強制唯讀，
+-- 就算複製貼上時多了一行寫入，資料庫也會拒絕（PR #60 review）。
+-- 前提是整段在同一個交易裡：SQL Editor 一次送出整段；用 psql 要加 -1（psql -1 -f ...），
+-- 否則每一句各自一個交易，這行只會出現警告、沒有作用。
+set transaction read only;
 
 with params as (
   select coalesce(nullif(current_setting('hdd.since', true), ''), '2026-12-06')::timestamptz as since

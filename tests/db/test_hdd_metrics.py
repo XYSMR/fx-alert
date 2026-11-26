@@ -11,16 +11,28 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import psycopg
+import pytest
+
 REPORT = Path(__file__).resolve().parents[2] / "supabase" / "reports" / "hdd_metrics.sql"
 SINCE = "2000-01-01"  # 測試資料都在實驗期間內
+READ_ONLY = "25006"  # read_only_sql_transaction
 
 
 def report(db, since: str = SINCE) -> dict[tuple[str, str], tuple[str, str]]:
-    """執行報表，回傳 {(metric, variant): (value, result)}。"""
+    """執行報表，回傳 {(metric, variant): (value, result)}。
+
+    報表開頭把交易設成唯讀；放在 savepoint 裡執行、結束後還原，測試才能繼續放資料。
+    """
     db.as_postgres()
     db.cur.execute("select set_config('hdd.since', %s, true)", (since,))
+    db.cur.execute("savepoint report")
     db.cur.execute(REPORT.read_text("utf-8"))
-    return {(m, v): (value, result) for m, _flag, v, value, _target, result in db.cur.fetchall()}
+    while db.cur.nextset():  # 最後一段 select 才是結果
+        pass
+    rows = db.cur.fetchall()
+    db.cur.execute("rollback to savepoint report")
+    return {(m, v): (value, result) for m, _flag, v, value, _target, result in rows}
 
 
 def set_flag(db, flag: str, *, enabled: bool = True, rollout: int = 100) -> None:
@@ -75,9 +87,20 @@ def test_empty_database_reports_no_data(db):
     assert r[(G1, "-")] == ("no check yet", "NO DATA")
 
 
+def test_report_blocks_writes_at_runtime(db):
+    """報表後面被多貼一行寫入：整段在同一個唯讀交易裡，資料庫會拒絕（PR #60 review）。"""
+    db.as_postgres()
+    script = REPORT.read_text("utf-8") + "\nupdate public.feature_flags set enabled = false;"
+    with pytest.raises(psycopg.Error) as exc, db.cur.connection.transaction():
+        db.cur.execute(script)  # 沒有參數：報表裡的 % 不會被當成 placeholder
+    assert exc.value.sqlstate == READ_ONLY, exc.value
+    assert db.one("select enabled from public.feature_flags where flag = 'trip_plan'")
+
+
 def test_report_is_read_only():
-    """報表只能有查詢；寫入資料的語句只准出現在註解裡。"""
+    """報表開頭設成唯讀，而且只有查詢；寫入語句只准出現在註解裡。"""
     code = "\n".join(line.split("--")[0] for line in REPORT.read_text("utf-8").splitlines()).lower()
+    assert code.lstrip().startswith("set transaction read only;")
     for word in ("insert", "update", "delete", "truncate", "alter", "drop", "create", "grant"):
         assert not re.search(rf"\b{word}\b", code), word
 

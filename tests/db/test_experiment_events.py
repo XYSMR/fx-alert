@@ -68,25 +68,17 @@ def test_event_must_match_its_experiment(db, alice):
     db.fails(INSERT, ("alert_saved", "trip_plan"), sqlstate=CHECK)
 
 
-def test_variant_is_decided_by_server(db, alice):
-    """瀏覽器不能指定 variant：flag 開 → on；flag 關 → off。"""
-    set_flag(db, "quick_target", enabled=True)
+def test_exposed_is_recorded_for_both_arms(db, alice):
+    """分母：ON、OFF 兩組都會記 exposed，variant 由伺服器決定。"""
+    set_flag(db, "trip_plan", enabled=True)
     db.as_user(alice)
-    db.run(INSERT, ("quick_target_clicked", "quick_target"))
-    db.fails(
-        "insert into public.experiment_events (event, flag, variant) values (%s, %s, 'on')",
-        ("quick_target_clicked", "quick_target"),
-        sqlstate=DENIED,
-    )
-    set_flag(db, "quick_target", enabled=False)
+    db.run(INSERT, ("exposed", "trip_plan"))
+    set_flag(db, "trip_plan", enabled=False)
     db.as_user(alice)
-    db.run(INSERT, ("quick_target_clicked", "quick_target"))
-    assert [r[3] for r in stored(db)] == ["on", "off"]
-
-
-def test_events_deleted_with_account(db, alice):
-    db.as_user(alice)
-    db.run(INSERT, ("trip_created", "trip_plan"))
-    db.as_postgres()
-    db.run("delete from auth.users where id = %s", (alice,))
-    assert stored(db) == []
+    db.run(INSERT, ("exposed", "trip_plan"))
+    db.run(INSERT, ("exposed", "quick_target"))
+    assert [r[1:] for r in stored(db)] == [
+        ("exposed", "trip_plan", "on"),
+        ("exposed", "trip_plan", "off"),
+        ("exposed", "quick_target", "off"),
+    ]

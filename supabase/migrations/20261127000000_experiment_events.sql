@@ -2,6 +2,7 @@
 --
 --   H1 trip_plan     ：有沒有建立旅程                      → trip_created
 --   H2 quick_target  ：有沒有按一鍵目標價、多快存下第一個提醒 → quick_target_clicked、alert_saved
+--   兩者的分母        ：有多少人看到（登入後載入頁面記一次）   → exposed（ON、OFF 兩組都記）
 --
 -- 權限（RLS）：
 --   * 使用者只能「新增自己的事件」，而且只能填 event、flag 兩欄；
@@ -16,7 +17,7 @@ create table public.experiment_events (
   user_id    uuid not null default auth.uid() references auth.users (id) on delete cascade,
   event      text not null
              constraint experiment_events_event_valid
-             check (event in ('trip_created', 'quick_target_clicked', 'alert_saved')),
+             check (event in ('exposed', 'trip_created', 'quick_target_clicked', 'alert_saved')),
   flag       text not null
              constraint experiment_events_flag_valid
              check (flag in ('trip_plan', 'quick_target')),
@@ -26,7 +27,8 @@ create table public.experiment_events (
   created_at timestamptz not null default now(),
   -- 事件要和實驗配對：H1 的事件不能被算進 H2（review by @Hank0903）
   constraint experiment_events_event_flag_pair check (
-    (event = 'trip_created' and flag = 'trip_plan')
+    event = 'exposed'
+    or (event = 'trip_created' and flag = 'trip_plan')
     or (event in ('quick_target_clicked', 'alert_saved') and flag = 'quick_target')
   )
 );

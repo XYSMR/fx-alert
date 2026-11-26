@@ -453,6 +453,25 @@ async function loadMine() {
 
 let flagRequest = Promise.resolve();
 
+const experimentFlags = new Map([
+  ["trip_created", "trip_plan"],
+  ["quick_target_clicked", "quick_target"],
+  ["alert_saved", "quick_target"],
+]);
+
+async function recordExperimentEvent(event) {
+  const flag = experimentFlags.get(event);
+  if (!client || !flag) return false;
+  try {
+    // Supabase assigns the user, timestamp and variant. The table is insert-only.
+    const { error } = await client.from("experiment_events").insert({ event, flag });
+    return !error;
+  } catch {
+    // Telemetry is best effort. Retrying an ambiguous insert could double count.
+    return false;
+  }
+}
+
 async function refresh() {
   if (!state.session) {
     state = { session: null, profile: null, rules: [], notifications: [] };
@@ -488,13 +507,16 @@ async function refresh() {
     await flagRequest;
   }
   if (state.session?.user.id !== userId) return;
+  const recordEvent = (event) => {
+    if (state.session?.user.id === userId) void recordExperimentEvent(event);
+  };
   renderAccount();
-  renderRules();
+  renderRules(recordEvent);
   renderNotifications();
   notify(personalCurrencies(publicList, state.rules, state.profile), true);
   if (window.FxTrips) {
     const tripPlan = window.FxFlags?.isOn("trip_plan") === true;
-    await window.FxTrips.show(client, publicList, bankCalendar, tripPlan);
+    await window.FxTrips.show(client, publicList, bankCalendar, tripPlan, recordEvent);
   }
 }
 
@@ -640,7 +662,7 @@ function ruleRow(rule) {
       h("button", { type: "button", class: "link danger", onclick: remove }, "刪除")));
 }
 
-function addForm() {
+function addForm(recordEvent) {
   const groups = addOptions(publicList, state.rules);
   if (!groups.length) return h("p", { class: "hint" }, "每個幣別都已經設定提醒了。");
   const select = h("select", { "aria-label": "幣別", id: "add-currency" },
@@ -655,6 +677,8 @@ function addForm() {
   const shortcuts = h("div", { class: "quick-targets", "data-flag": "quick_target" });
   let lastCurrency = select.value;
   let prefilledValue = null;
+  let shortcutRecorded = false;
+  let saving = false;
   const updateHint = () => {
     const code = select.value;
     if (code !== lastCurrency) {
@@ -678,9 +702,14 @@ function addForm() {
       ...values.map((value) => h("button", {
         type: "button", "aria-label": `填入 ${value}`,
         onclick: () => {
+          if (!window.FxFlags?.isOn("quick_target")) return;
           prefilledValue = value;
           target.value = value;
           target.focus();
+          if (!shortcutRecorded) {
+            shortcutRecorded = true;
+            recordEvent("quick_target_clicked");
+          }
         },
       }, value)),
     );
@@ -689,14 +718,22 @@ function addForm() {
   updateHint();
   const add = async (event) => {
     event.preventDefault();
+    if (saving) return;
     const t = validateTarget(target.value);
     if (t.error) return say(t.error, "error");
     const far = farFromRateMessage(t.value, rateOf(select.value));
     if (far && !confirm(far)) return;
-    const { error } = await client.from("alert_rules").insert({ currency: select.value, target: t.value });
-    if (error) return writeFailed(error);
-    say(`已新增${NAMES[select.value] ?? select.value}的提醒`);
-    await refresh();
+    saving = true;
+    try {
+      const currency = select.value;
+      const { error } = await client.from("alert_rules").insert({ currency, target: t.value });
+      if (error) return writeFailed(error);
+      recordEvent("alert_saved");
+      say(`已新增${NAMES[currency] ?? currency}的提醒`);
+      await refresh();
+    } finally {
+      saving = false;
+    }
   };
   return h("form", { class: "rule add", id: "add-form", onsubmit: add },
     h("strong", {}, "＋ 新增提醒"),
@@ -783,7 +820,7 @@ function deleteSection() {
       msg));
 }
 
-function renderRules() {
+function renderRules(recordEvent) {
   byId("my-rules").hidden = false;
   const schedule = window.FxApp && window.FxApp.scheduleHint ? window.FxApp.scheduleHint() : "";
   byId("my-rules-body").replaceChildren(
@@ -791,7 +828,7 @@ function renderRules() {
     renderNotifyWindow(),
     schedule ? h("p", { class: "hint" }, schedule) : null,
     ...sortRules(state.rules, publicList).map(ruleRow),
-    addForm(),
+    addForm(recordEvent),
     h("h3", { class: "section-title" }, "帳號"),
     deleteSection(),
   );

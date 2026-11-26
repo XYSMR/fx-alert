@@ -3,9 +3,10 @@
 -- 讓整段只能讀，不會改到任何資料。
 -- 不是 migration：部署 workflow 不會執行它。
 --
--- 實驗期間從 hdd.since 起算，沒設定就用 2026-12-06（quick_target 開始 20% rollout）。
+-- 實驗期間從 hdd.since 起算，沒設定就用台灣時間 2026-12-06 00:00（quick_target 開始 20% rollout）。
+-- 日期一律寫上 +08：SQL Editor 的時區是 UTC，只寫日期會變成台灣時間早上 8 點（PR #60 review）。
 -- 換 rollout 階段時重設起點，各階段分開看，在同一個查詢分頁先執行：
---   select set_config('hdd.since', '2026-12-10', false);
+--   select set_config('hdd.since', '2026-12-10 00:00+08', false);
 --
 -- 計算原則
 --   * 只數不重複的使用者，每人每種事件只看第一筆：
@@ -34,7 +35,7 @@
 set transaction read only;
 
 with params as (
-  select coalesce(nullif(current_setting('hdd.since', true), ''), '2026-12-06')::timestamptz as since
+  select coalesce(nullif(current_setting('hdd.since', true), ''), '2026-12-06 00:00+08')::timestamptz as since
 ),
 
 -- 每人在每個 flag 的第一筆 exposed：決定分母和組別（只算一般使用者）

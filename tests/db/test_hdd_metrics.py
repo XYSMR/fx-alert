@@ -178,6 +178,23 @@ def test_h1_only_counts_users_who_signed_up_during_the_experiment(db):
     assert report(db)[(H1, "on")] == ("3 / 10 = 30.0%", "PASS")  # 不是 3 / 15 = 20% FAIL
 
 
+def test_default_start_is_midnight_taiwan_time(db):
+    """沒設定 hdd.since：從台灣時間 2026-12-06 00:00 起算，不是 UTC 00:00（PR #60 review）。"""
+    set_flag(db, "trip_plan", rollout=100)
+    early = users(db, 10, "early", exposed="trip_plan")  # 台灣 00:30，UTC 是前一天 16:30
+    late = users(db, 10, "late", exposed="trip_plan")  # 台灣 09:00
+    db.as_postgres()
+    db.cur.execute("set local timezone = 'UTC'")  # 和 Supabase SQL Editor 一樣
+    for group, at in ((early, "2026-12-06 00:30+08"), (late, "2026-12-06 09:00+08")):
+        for u in group:
+            db.run("update public.profiles set created_at = %s where user_id = %s", (at, u))
+            db.run(
+                "update public.experiment_events set created_at = %s where user_id = %s", (at, u)
+            )
+    # early 的人在實驗期間內，要算進分母：20 人，不是只有 late 的 10 人
+    assert report(db, since="")[(H1, "on")][0] == "0 / 20 = 0.0%"
+
+
 def test_events_before_since_are_ignored(db):
     set_flag(db, "trip_plan", rollout=100)
     us = users(db, 10, exposed="trip_plan")

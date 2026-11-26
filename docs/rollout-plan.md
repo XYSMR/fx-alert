@@ -36,7 +36,7 @@ flag 的設計見 `supabase/migrations/20261123000100_feature_flags.sql`；指�
 update public.feature_flags set enabled = true, rollout = 20 where flag = 'quick_target';
 
 -- 2. 指標從這個階段開始算
-select set_config('hdd.since', '2026-12-06', false);
+select set_config('hdd.since', '2026-12-06 00:00+08', false);  -- 台灣時間，要寫 +08
 -- 接著貼上 supabase/reports/hdd_metrics.sql 全文執行
 ```
 

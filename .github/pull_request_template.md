@@ -10,6 +10,9 @@
 ## Risky areas / notes for reviewers
 <!-- Identify affected paths, edge cases, rollout concerns, and anything needing a closer look. -->
 
+## Author checklist
+- [ ] I requested a review from my assigned weekly reviewer in the Reviewers sidebar.
+
 ## Reviewer checklist
 - [ ] The change addresses the linked issue and stays within scope.
 - [ ] Test evidence covers the affected behavior and relevant failure cases.

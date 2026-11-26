@@ -39,7 +39,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function setup({ trip = true, quick = true } = {}) {
+async function setup({ trip = true, quick = true, signedIn = true } = {}) {
   const nodes = new Map();
   const calls = [];
   const behavior = { confirm: true, insert: {} };
@@ -76,9 +76,10 @@ async function setup({ trip = true, quick = true } = {}) {
     vm.runInContext(readFileSync(join(__dirname, "..", file), "utf8"), sandbox);
   }
   const refresh = () => vm.runInContext("refresh()", sandbox);
+  const setting = signedIn ? '{ user: { id: "fixture-user" } }' : "null";
   vm.runInContext([
     "client = clientFixture;",
-    'state.session = { user: { id: "fixture-user" } };',
+    "state.session = " + setting + ";",
     'publicList = [{ code: "JPY", name: "JPY", rate: "0.2119", popular_rank: 1 }];',
     "loadMine = async () => true;",
     "renderAccount = () => {};",
@@ -88,8 +89,11 @@ async function setup({ trip = true, quick = true } = {}) {
     "deleteSection = () => null;",
   ].join("\n"), sandbox);
   await refresh();
+  const pageLoadCalls = calls.splice(0);
   return {
     calls,
+    pageLoadCalls,
+    refresh,
     behavior,
     alert: () => withId(nodes.get("my-rules-body"), "add-form"),
     trips: () => withId(nodes.get("my-trips-body"), "trip-add-form"),
@@ -101,6 +105,21 @@ async function setup({ trip = true, quick = true } = {}) {
     },
   };
 }
+
+test("signed-in page exposure emits once per flag in both arms, with no signed-out exposure", async () => {
+  for (const enabled of [true, false]) {
+    const ui = await setup({ trip: enabled, quick: enabled });
+    assert.deepEqual(ui.pageLoadCalls, [
+      { table: "experiment_events", payload: { event: "exposed", flag: "trip_plan" } },
+      { table: "experiment_events", payload: { event: "exposed", flag: "quick_target" } },
+    ]);
+    await ui.refresh();
+    assert.deepEqual(ui.calls, []);
+  }
+  const anonymous = await setup({ signedIn: false });
+  assert.deepEqual(anonymous.pageLoadCalls, []);
+  assert.equal(anonymous.alert(), undefined);
+});
 
 test("Quick Target ON records one selection per form; it saves only after the explicit Add", async () => {
   const ui = await setup();

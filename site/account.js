@@ -452,16 +452,10 @@ async function loadMine() {
 }
 
 let flagRequest = Promise.resolve();
+const exposedUsers = new Set();
 
-const experimentFlags = new Map([
-  ["trip_created", "trip_plan"],
-  ["quick_target_clicked", "quick_target"],
-  ["alert_saved", "quick_target"],
-]);
-
-async function recordExperimentEvent(event) {
-  const flag = experimentFlags.get(event);
-  if (!client || !flag) return false;
+async function recordExperimentEvent(event, flag) {
+  if (!client) return false;
   try {
     // Supabase assigns the user, timestamp and variant. The table is insert-only.
     const { error } = await client.from("experiment_events").insert({ event, flag });
@@ -507,12 +501,17 @@ async function refresh() {
     await flagRequest;
   }
   if (state.session?.user.id !== userId) return;
-  const recordEvent = (event) => {
-    if (state.session?.user.id === userId) void recordExperimentEvent(event);
+  const recordEvent = (event, flag) => {
+    if (state.session?.user.id === userId) void recordExperimentEvent(event, flag);
   };
   renderAccount();
   renderRules(recordEvent);
   renderNotifications();
+  if (window.FxFlags && !exposedUsers.has(userId)) {
+    exposedUsers.add(userId);
+    recordEvent("exposed", "trip_plan");
+    recordEvent("exposed", "quick_target");
+  }
   notify(personalCurrencies(publicList, state.rules, state.profile), true);
   if (window.FxTrips) {
     const tripPlan = window.FxFlags?.isOn("trip_plan") === true;
@@ -708,7 +707,7 @@ function addForm(recordEvent) {
           target.focus();
           if (!shortcutRecorded) {
             shortcutRecorded = true;
-            recordEvent("quick_target_clicked");
+            recordEvent("quick_target_clicked", "quick_target");
           }
         },
       }, value)),
@@ -728,7 +727,7 @@ function addForm(recordEvent) {
       const currency = select.value;
       const { error } = await client.from("alert_rules").insert({ currency, target: t.value });
       if (error) return writeFailed(error);
-      recordEvent("alert_saved");
+      recordEvent("alert_saved", "quick_target");
       say(`已新增${NAMES[currency] ?? currency}的提醒`);
       await refresh();
     } finally {

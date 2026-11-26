@@ -456,7 +456,7 @@
         const { error } = await tClient.from("trips")
           .insert({ currency: select.value, departure: d.value, amount: a.value, name: n.value });
         if (error) return tSay(tripErrorMessage(error), "error");
-        recordEvent?.("trip_created");
+        recordEvent?.("trip_created", "trip_plan");
         await reload(`已建立${n.value ?? nameOf(select.value)}的旅程`);
       } finally {
         saving = false;

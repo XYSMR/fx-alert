@@ -331,6 +331,7 @@
   let tData = { trips: [], exchanges: [], notices: [] };
   let tEnabled = true; // trip_plan flag（flags.js）
   let tLoadVersion = 0;
+  let tRecordEvent = null;
 
   function th(tag, attrs = {}, ...children) {
     const node = document.createElement(tag);
@@ -439,18 +440,27 @@
         th("ul", { class: "trip-steps" }, ...rest.map((line) => th("li", {}, line))), note);
     };
     dep.addEventListener("change", update);
+    let saving = false;
     const submit = async (event) => {
       event.preventDefault();
+      if (!tEnabled || !tClient || saving) return;
       const d = validateDeparture(dep.value, today);
       if (d.error) return tSay(d.error, "error");
       const a = validateAmount(amount.value, "外幣金額");
       if (a.error) return tSay(a.error, "error");
       const n = validateName(name.value);
       if (n.error) return tSay(n.error, "error");
-      const { error } = await tClient.from("trips")
-        .insert({ currency: select.value, departure: d.value, amount: a.value, name: n.value });
-      if (error) return tSay(tripErrorMessage(error), "error");
-      await reload(`已建立${n.value ?? nameOf(select.value)}的旅程`);
+      const recordEvent = tRecordEvent;
+      saving = true;
+      try {
+        const { error } = await tClient.from("trips")
+          .insert({ currency: select.value, departure: d.value, amount: a.value, name: n.value });
+        if (error) return tSay(tripErrorMessage(error), "error");
+        recordEvent?.("trip_created", "trip_plan");
+        await reload(`已建立${n.value ?? nameOf(select.value)}的旅程`);
+      } finally {
+        saving = false;
+      }
     };
     return th("form", { class: "rule add", id: "trip-add-form", "data-flag": "trip_plan", onsubmit: submit },
       th("strong", {}, "＋ 新增旅程"),
@@ -610,9 +620,10 @@
   }
 
   /** enabled：trip_plan flag 對這個人是否開啟（account.js 從 FxFlags 傳進來；沒傳 = 開啟） */
-  async function show(client, currencies, calendarJson, enabled = true) {
+  async function show(client, currencies, calendarJson, enabled = true, recordEvent = null) {
     tClient = client;
     tEnabled = enabled !== false;
+    tRecordEvent = recordEvent;
     tList = currencies;
     tCal = makeCalendar(calendarJson);
     await reload();
@@ -621,6 +632,7 @@
   function hide() {
     tLoadVersion++;
     tClient = null;
+    tRecordEvent = null;
     tData = { trips: [], exchanges: [], notices: [] };
     tEnabled = true;
     const box = trip$("my-trips");

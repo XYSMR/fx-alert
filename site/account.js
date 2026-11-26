@@ -702,7 +702,7 @@ function addForm(recordEvent) {
       ...values.map((value) => h("button", {
         type: "button", "aria-label": `填入 ${value}`,
         onclick: () => {
-          if (!window.FxFlags?.isOn("quick_target")) return;
+          if (saving || !window.FxFlags?.isOn("quick_target")) return;
           prefilledValue = value;
           target.value = value;
           target.focus();

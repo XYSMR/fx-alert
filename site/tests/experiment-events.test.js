@@ -155,6 +155,22 @@ test("Quick Target OFF ignores shortcut activation and records only successful m
   assert.equal(ui.events().length, 1);
 });
 
+test("a shortcut cannot change the target or record a click during a manual save", async () => {
+  const ui = await setup();
+  const form = ui.alert();
+  const target = withId(form, "add-target");
+  target.value = "0.2100";
+  const write = deferred();
+  ui.behavior.insert.alert_rules = () => write.promise;
+  const saved = submit(form);
+  byLabel(form, "填入 0.2098").handlers.click();
+  assert.equal(target.value, "0.2100");
+  assert.deepEqual(ui.calls, [{ table: "alert_rules", payload: { currency: "JPY", target: "0.21" } }]);
+  write.resolve({ error: null });
+  await saved;
+  assert.deepEqual(ui.events(), [{ event: "alert_saved", flag: "quick_target" }]);
+});
+
 test("Trip Plan records a successful creation once and preserves success on a telemetry rejection", async () => {
   const ui = await setup();
   const form = ui.trips();

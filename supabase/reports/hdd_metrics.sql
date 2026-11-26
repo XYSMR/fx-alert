@@ -15,11 +15,13 @@
 --     沒有 exposed 事件的人（還沒打開過頁面）不算進分母。
 --   * 只算一般使用者（role = 'user'）：admin、beta 是組員的測試帳號，永遠在 ON 組，
 --     樣本又小（H1 10 人、H2 5 人），組員自己測試就可能讓結果變成 PASS（PR #60 review）。
---   * H2 只看實驗期間內才註冊的新使用者（profiles.created_at = 第一次登入）。
+--   * H1、H2 都只看實驗期間內才註冊的新使用者（profiles.created_at = 第一次登入）：
+--     舊使用者可能在 since 之前就建過旅程，會被誤算成「沒建立」（PR #60 review）。
+--     trip_plan 在正式專案是 100%，沒有 OFF 組可比；H1 的門檻本來就是絕對的 30%，不靠 OFF 組。
 --   * result：PASS / FAIL 對照 A10 的假設門檻；INFO 是參考值；NO DATA 是樣本不夠。
 --
 -- 門檻（docs/rollout-plan.md）
---   H1 trip_plan     ON 組 ≥ 30% 的使用者建立旅程（樣本至少 10 人）
+--   H1 trip_plan     ON 組 ≥ 30% 的新使用者建立旅程（樣本至少 10 人）
 --   H2 quick_target  ON 組新使用者「第一次登入 → 第一個提醒」中位數 < 60 秒（樣本至少 5 人）
 --   Guardrail H2     ON 組 24 小時內修改提醒的比例不高於 OFF 組
 --   Guardrail H1     最近一次匯率檢查成功、沒有寄信錯誤（錯誤率歷史和執行時間看 GitHub Actions）
@@ -58,9 +60,10 @@ h1 as (
          count(*)          as exposed,
          count(fe.user_id) as created
     from exposure a
+    cross join params
     left join first_event fe
       on fe.user_id = a.user_id and fe.flag = 'trip_plan' and fe.event = 'trip_created'
-   where a.flag = 'trip_plan'
+   where a.flag = 'trip_plan' and a.signed_up_at >= params.since
    group by a.variant
 ),
 
@@ -108,7 +111,7 @@ g2_share as (
 
 report (seq, metric, flag, variant, value, target, result) as (
   -- H1：ON 組建立旅程的比例
-  select 1, 'H1 users who created a trip', 'trip_plan', v.variant,
+  select 1, 'H1 new users who created a trip', 'trip_plan', v.variant,
          coalesce(h1.created, 0) || ' / ' || coalesce(h1.exposed, 0)
            || coalesce(' = ' || round(100.0 * h1.created / nullif(h1.exposed, 0), 1) || '%', ''),
          case when v.variant = 'on' then '>= 30%' else 'baseline' end,

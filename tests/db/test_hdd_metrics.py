@@ -56,7 +56,7 @@ def signed_up_seconds_before_now(db, user, seconds: int) -> None:
     )
 
 
-H1 = "H1 users who created a trip"
+H1 = "H1 new users who created a trip"
 H2 = "H2 median login -> first alert"
 G2 = "Guardrail: alerts edited within 24 h"
 G1 = "Guardrail: latest rate check"
@@ -140,6 +140,19 @@ def test_group_is_fixed_when_first_exposed(db):
     r = report(db)
     assert r[(H1, "off")] == ("4 / 4 = 100.0%", "INFO")
     assert r[(H1, "on")] == ("0 / 0", "NO DATA")
+
+
+def test_h1_only_counts_users_who_signed_up_during_the_experiment(db):
+    """舊使用者可能在實驗開始前就建過旅程，不能被算成「沒建立」（PR #60 review）。"""
+    set_flag(db, "trip_plan", rollout=100)
+    old = users(db, 5, "old", exposed="trip_plan")
+    db.as_postgres()
+    for u in old:
+        db.run("update public.profiles set created_at = '1999-01-01' where user_id = %s", (u,))
+    new = users(db, 10, "new", exposed="trip_plan")
+    for u in new[:3]:
+        event(db, u, "trip_created", "trip_plan")
+    assert report(db)[(H1, "on")] == ("3 / 10 = 30.0%", "PASS")  # 不是 3 / 15 = 20% FAIL
 
 
 def test_events_before_since_are_ignored(db):

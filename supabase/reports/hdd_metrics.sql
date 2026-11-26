@@ -13,6 +13,8 @@
 --     exposed 在頁面載入時記一次，ON、OFF 兩組都記；variant 由伺服器寫入時用
 --     is_feature_on() 決定（PR #54），所以 rollout 比例中途改了，之前的分組也不會跑掉。
 --     沒有 exposed 事件的人（還沒打開過頁面）不算進分母。
+--   * 只算一般使用者（role = 'user'）：admin、beta 是組員的測試帳號，永遠在 ON 組，
+--     樣本又小（H1 10 人、H2 5 人），組員自己測試就可能讓結果變成 PASS（PR #60 review）。
 --   * H2 只看實驗期間內才註冊的新使用者（profiles.created_at = 第一次登入）。
 --   * result：PASS / FAIL 對照 A10 的假設門檻；INFO 是參考值；NO DATA 是樣本不夠。
 --
@@ -26,7 +28,7 @@ with params as (
   select coalesce(nullif(current_setting('hdd.since', true), ''), '2026-12-06')::timestamptz as since
 ),
 
--- 每人在每個 flag 的第一筆 exposed：決定分母和組別
+-- 每人在每個 flag 的第一筆 exposed：決定分母和組別（只算一般使用者）
 exposure as (
   select distinct on (e.user_id, e.flag)
          e.user_id,
@@ -36,7 +38,9 @@ exposure as (
     from public.experiment_events e
     join public.profiles p on p.user_id = e.user_id
     cross join params
-   where e.event = 'exposed' and e.created_at >= params.since
+   where e.event = 'exposed'
+     and e.created_at >= params.since
+     and p.role = 'user'
    order by e.user_id, e.flag, e.created_at, e.id
 ),
 

@@ -56,6 +56,9 @@ select set_config('hdd.since', '2026-12-06', false);
 | 最近一次匯率檢查 | 成功、0 封寄信錯誤 | guardrail |
 | check job 執行時間 | < 2 分鐘 | guardrail，看 GitHub Actions 的執行紀錄 |
 
+報表只算一般使用者（`role = 'user'`）：admin、beta 是組員的測試帳號，永遠在 ON 組，
+算進去的話，組員自己測試就可能讓小樣本變成 PASS（PR #60 review）。
+
 H1、H2 沒過門檻**不是** kill switch 的理由：它代表假設不成立，不代表功能有害。
 樣本不夠時顯示 NO DATA（H1 少於 10 人、H2 少於 5 人），不做判斷。
 

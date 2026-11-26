@@ -191,17 +191,33 @@ def test_h2_only_counts_users_who_signed_up_during_the_experiment(db):
     assert report(db)[(H2, "on")] == ("- (0 of 2 new users)", "NO DATA")
 
 
-def test_h2_groups_follow_role_and_rollout(db):
-    """rollout 0：只有 beta 在 ON 組，其他人是 OFF 組的對照（組別由伺服器在 exposed 時決定）。"""
-    set_flag(db, "quick_target", rollout=0)
-    beta, normal = users(db, 2)
+def test_team_accounts_are_not_counted(db):
+    """admin、beta 永遠在 ON 組，是組員的測試帳號：不算進分母，也不算進分子（PR #60 review）。"""
+    set_flag(db, "trip_plan", rollout=100)
+    real = users(db, 10, "real", exposed="trip_plan")
+    team = users(db, 5, "team")
     db.as_postgres()
-    db.run("update public.profiles set role = 'beta' where user_id = %s", (beta,))
-    for u in (beta, normal):
+    for u, role in zip(team, ("beta", "beta", "beta", "admin", "admin"), strict=True):
+        db.run("update public.profiles set role = %s where user_id = %s", (role, u))
+    for u in team:
+        event(db, u, "exposed", "trip_plan")
+        event(db, u, "trip_created", "trip_plan")
+    event(db, real[0], "trip_created", "trip_plan")
+    assert report(db)[(H1, "on")] == ("1 / 10 = 10.0%", "FAIL")  # 不是 6 / 15 = 40% PASS
+
+
+def test_beta_testing_alone_cannot_pass_h2(db):
+    """rollout 0% 時只有 beta 在 ON 組；他們存提醒再快也不會出現在報表裡。"""
+    set_flag(db, "quick_target", rollout=0)
+    team = users(db, 5, "team")
+    db.as_postgres()
+    for u in team:
+        db.run("update public.profiles set role = 'beta' where user_id = %s", (u,))
+    for u in team:
         event(db, u, "exposed", "quick_target")
-    r = report(db)
-    assert r[(H2, "on")][0].endswith("(0 of 1 new users)")
-    assert r[(H2, "off")][0].endswith("(0 of 1 new users)")
+        signed_up_seconds_before_now(db, u, 10)
+        event(db, u, "alert_saved", "quick_target")
+    assert report(db)[(H2, "on")] == ("- (0 of 0 new users)", "NO DATA")
 
 
 # ---------------------------------------------------------------------------
@@ -229,13 +245,11 @@ def rules(db, owners, *, edited: int, by_scheduler: int = 0) -> None:
 
 
 def split_groups(db, n_on: int, n_off: int):
+    """一般使用者分成兩組：rollout 100% 時曝光的在 ON 組，改成 0% 後才曝光的在 OFF 組。"""
+    set_flag(db, "quick_target", rollout=100)
+    on = users(db, n_on, "on", exposed="quick_target")
     set_flag(db, "quick_target", rollout=0)
-    on, off = users(db, n_on, "on"), users(db, n_off, "off")
-    db.as_postgres()
-    for u in on:
-        db.run("update public.profiles set role = 'beta' where user_id = %s", (u,))
-    for u in on + off:
-        event(db, u, "exposed", "quick_target")
+    off = users(db, n_off, "off", exposed="quick_target")
     return on, off
 
 

@@ -329,3 +329,42 @@ def test_jobs_with_secrets_are_bound_to_an_environment():
             env = job.get("environment")
             found[(path.name, name)] = env["name"] if isinstance(env, dict) else env
     assert found == expected
+
+
+def _assembled_paths() -> set[str]:
+    """deploy-pages 的 Assemble site 會複製哪些 site/ 底下的檔案或資料夾"""
+    steps = yaml.safe_load(read("deploy-pages.yml"))["jobs"]["deploy"]["steps"]
+    run = next(s["run"] for s in steps if s.get("name") == "Assemble site")
+    return set(re.findall(r"site/([\w./-]+)", run))
+
+
+def _is_assembled(ref: str, assembled: set[str]) -> bool:
+    return any(ref == a or ref.startswith(a.rstrip("/") + "/") for a in assembled)
+
+
+def test_every_local_file_the_pages_use_is_deployed():
+    """網頁引用的本站檔案都要在 Assemble site 裡，否則正式網站會 404
+    （之前 trips.js 就漏過）。config.js 由部署另外產生。"""
+    site = WF.parents[1] / "site"
+    assembled = _assembled_paths()
+    generated = {"config.js"}
+    for page in ("index.html", "privacy.html", "unsubscribe.html"):
+        assert page in assembled, page
+        html = (site / page).read_text(encoding="utf-8")
+        for ref in re.findall(r'(?:src|href)="([^"#:]+)"', html):
+            if ref in generated or ref.endswith("/"):
+                continue  # 連到首頁（./）之類的頁面連結
+            assert (site / ref).exists(), f"{page} 引用了不存在的 {ref}"
+            assert _is_assembled(ref, assembled), f"{page} 引用的 {ref} 沒有部署"
+
+
+def test_pwa_files_are_deployed_at_the_site_root():
+    """sw.js 必須放在網站根目錄，scope 才能涵蓋整個網站；manifest 的圖示也要部署"""
+    assembled = _assembled_paths()
+    for f in ("sw.js", "pwa.js", "manifest.webmanifest"):
+        assert f in assembled, f
+    site = WF.parents[1] / "site"
+    manifest = json.loads((site / "manifest.webmanifest").read_text(encoding="utf-8"))
+    for icon in manifest["icons"]:
+        assert (site / icon["src"]).exists(), icon["src"]
+        assert _is_assembled(icon["src"], assembled), icon["src"]

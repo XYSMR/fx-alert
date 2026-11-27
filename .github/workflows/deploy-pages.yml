@@ -77,7 +77,8 @@ jobs:
         run: |
           mkdir _site
           cp -r site/index.html site/style.css site/app.js site/flags.js site/trips.js site/account.js site/vendor \
-            site/data.json site/history site/unsubscribe.html site/unsubscribe.js site/privacy.html _site/
+            site/data.json site/history site/unsubscribe.html site/unsubscribe.js site/privacy.html \
+            site/pwa.js site/sw.js site/manifest.webmanifest site/icons _site/
           find _site -type f | sort
 
       # 登入功能開關（GitHub → Settings → Variables，不是 Secrets：這些值本來就公開）

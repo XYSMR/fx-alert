@@ -343,11 +343,12 @@ commit 到 `state` 分支、部署 `data.json` 前都會自動掃描，確認沒
 事後確認兆豐那天沒有收盤價，在 `seed/tw_bank_calendar.csv` 加一行 `日期,off,颱風停班（臺北市；外匯市場休市）`。
 未來的颱風沒辦法預先知道：如果出發前提醒那天剛好停班，會在下一個營業日（備用日）補寄。
 
-### 待辦：網站做成 PWA、手機推播通知（出國換匯計畫完成後）
+### 進行中：網站做成 PWA、手機推播通知
 
-出國換匯計畫的 PR 全部完成後的下一個階段：網站加上 manifest、service worker，可以「加到主畫面」，
-並用 Web Push 送到價通知（Email 以外的另一個管道）。屆時再規劃：推播訂閱存哪裡（Supabase，RLS 只看得到自己）、
-iOS 需要先加到主畫面才能收推播、通知時段和每日上限也要套用在推播。
+設計和決定都在 [`docs/web-push.md`](docs/web-push.md)。目前完成 PR 1：網站可以「加到主畫面」（manifest、圖示、`sw.js`），
+還不會送推播。正式專案的推播等 12/15 A10 Demo 之後才開放。
+
+修改 `site/sw.js` 時，請把裡面的 `SW_VERSION` 改成新的日期；使用者手機怎麼更新到新版，見 `docs/web-push.md`。
 
 ### 不做的事
 
@@ -677,6 +678,8 @@ site/
   trips.js                          出國換匯計畫：建立旅程、旅程進度、記錄換匯
   unsubscribe.html  unsubscribe.js  退訂確認頁
   privacy.html                      隱私說明
+  pwa.js  sw.js  manifest.webmanifest  icons/
+                                    加到主畫面（PWA）；sw.js 不做離線快取
   vendor/                           Chart.js、supabase-js
   samples/  tests/                  本機預覽資料、前端測試（不部署）
 supabase/
@@ -684,10 +687,12 @@ supabase/
   functions/unsubscribe/            一鍵退訂 Edge Function（Deno）
   functions/delete-account/         刪除帳號 Edge Function（Deno）
 seed/                               一次性回補的兆豐每日收盤價、銀行營業日曆（來源和 SHA-256 見 seed/README.md）
-scripts/                            simulate_trip_rules.py（提醒次數模擬）、make_trip_fixture.py（Python／網頁對照檔）
+scripts/                            simulate_trip_rules.py（提醒次數模擬）、make_trip_fixture.py（Python／網頁對照檔）、
+                                    make_icons.py（產生 PWA 圖示）
 tests/                              Python 測試；tests/db/ 是資料庫（RLS、pg_cron）測試；tests/fixtures/ 對照檔
 docs/multi-user.md                  多人版設計、切換與退回流程
 docs/trip-plan.md                   出國換匯計畫的設計、規則、測試與維護
+docs/web-push.md                    PWA、手機推播的設計（白名單、權限、Email 與推播的關係、sw.js 更新）
 ```
 
 ## 資料來源

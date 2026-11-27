@@ -54,6 +54,15 @@
     return Uint8Array.from(bin, (c) => c.charCodeAt(0));
   }
 
+  /** 這個訂閱是不是用 vapidKey 建立的（瀏覽器沒提供 options 時當作是） */
+  function keyMatches(sub, vapidKey) {
+    const raw = sub && sub.options && sub.options.applicationServerKey;
+    if (!raw || !vapidKey) return true;
+    const bytes = new Uint8Array(raw);
+    const want = base64UrlToBytes(vapidKey);
+    return bytes.length === want.length && bytes.every((b, i) => b === want[i]);
+  }
+
   /** PushSubscription → 要存進資料庫的三個值；格式不對或網址不在白名單就回傳 null */
   function subscriptionKeys(sub) {
     const json = sub && typeof sub.toJSON === "function" ? sub.toJSON() : null;
@@ -142,14 +151,15 @@
   /**
    * 每次打開網站要怎麼同步這台裝置（純判斷，實際動作在 resync）：
    *   "save"        瀏覽器有訂閱、資料庫也有這台：更新金鑰和 last_seen_at
+   *   "rekey"       資料庫有這台，但訂閱是用舊的 VAPID 公鑰建立的（換過金鑰）：用新公鑰重新訂閱
    *   "resubscribe" 瀏覽器的訂閱不見了（Apple 換網址等），但資料庫還有這台：重新訂閱
    *   "forget"      資料庫已經沒有這台（在別台裝置移除了）：清掉紀錄，不自動加回去
    *   "none"        什麼都不做
    */
-  function resyncAction({ permission, currentEndpoint, stored, rows }) {
+  function resyncAction({ permission, currentEndpoint, stored, rows, keyMatches = true }) {
     if (permission !== "granted") return "none";
     const has = (endpoint) => rows.some((r) => r.endpoint === endpoint);
-    if (currentEndpoint && has(currentEndpoint)) return "save";
+    if (currentEndpoint && has(currentEndpoint)) return keyMatches ? "save" : "rekey";
     if (!stored) return "none";
     if (!has(stored.endpoint)) return "forget";
     return currentEndpoint ? "none" : "resubscribe";
@@ -235,17 +245,20 @@
       currentEndpoint: sub ? sub.endpoint : null,
       stored,
       rows,
+      keyMatches: keyMatches(sub, vapidKey()),
     });
     if (action === "save") {
       await save(sub);
       return sub;
     }
     if (action === "forget") writeDevice(localStorage, null);
-    if (action === "resubscribe" && vapidKey()) {
+    if ((action === "resubscribe" || action === "rekey") && vapidKey()) {
+      const oldEndpoint = action === "rekey" ? sub.endpoint : stored.endpoint;
+      if (action === "rekey") await sub.unsubscribe();
       const fresh = await subscribe();
       const { error } = await save(fresh);
-      if (!error && stored.endpoint !== fresh.endpoint) {
-        await ctx.client.from("push_subscriptions").delete().eq("endpoint", stored.endpoint);
+      if (!error && oldEndpoint !== fresh.endpoint) {
+        await ctx.client.from("push_subscriptions").delete().eq("endpoint", oldEndpoint);
       }
       return error ? null : fresh;
     }
@@ -424,6 +437,7 @@
     readDevice,
     writeDevice,
     resyncAction,
+    keyMatches,
   };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = exported;

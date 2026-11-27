@@ -174,8 +174,24 @@ test("resyncAction：每次打開網站的同步方式", () => {
     [{ permission: "granted", currentEndpoint: APPLE, stored: null, rows: [] }, "none"],
     // 瀏覽器有新的訂閱、資料庫還是舊的：不自動處理（不確定是不是同一個人）
     [{ permission: "granted", currentEndpoint: NEW, stored, rows: [row(APPLE)] }, "none"],
+    // 換過 VAPID 金鑰：用新公鑰重新訂閱（舊訂閱送不出去）
+    [{ permission: "granted", currentEndpoint: APPLE, stored, rows: [row(APPLE)], keyMatches: false }, "rekey"],
+    [{ permission: "granted", currentEndpoint: APPLE, stored, rows: [], keyMatches: false }, "forget"],
   ];
   for (const [input, want] of cases) assert.equal(p.resyncAction(input), want, JSON.stringify(input));
+});
+
+test("keyMatches：比對訂閱用的公鑰；瀏覽器沒提供時當作相同", () => {
+  const raw = Buffer.alloc(65, 9);
+  raw[0] = 4;
+  const key = raw.toString("base64url");
+  const other = Buffer.from(raw).fill(8, 1).toString("base64url");
+  const sub = { options: { applicationServerKey: new Uint8Array(raw).buffer } };
+  assert.equal(p.keyMatches(sub, key), true);
+  assert.equal(p.keyMatches(sub, other), false);
+  assert.equal(p.keyMatches({ options: {} }, key), true);
+  assert.equal(p.keyMatches({}, key), true);
+  assert.equal(p.keyMatches(sub, null), true);
 });
 
 // ---------- 程式結構 ----------

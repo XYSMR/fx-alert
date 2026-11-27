@@ -10,6 +10,8 @@ requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31",
     "pyyaml>=6.0",
+    # 手機推播（push.py）：Web Push 的加密和 VAPID 簽章
+    "pywebpush>=2.5,<3",
 ]
 
 [project.optional-dependencies]

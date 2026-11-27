@@ -63,6 +63,7 @@ jobs:
           SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
           # 有設定才會產生退訂連結（只放進信件，不會印在 log）
           UNSUBSCRIBE_SECRET: ${{ secrets.STAGING_UNSUBSCRIBE_SECRET }}
+          WEB_PUSH_PRIVATE_KEY: ${{ secrets.STAGING_WEB_PUSH_PRIVATE_KEY }}
         run: python -m fx_alert check --mode multi --dry-run --force
 
       - name: Multi-user check (send, writes to staging)
@@ -73,6 +74,8 @@ jobs:
           UNSUBSCRIBE_SECRET: ${{ secrets.STAGING_UNSUBSCRIBE_SECRET }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          # staging 自己的推播金鑰（和正式專案不同組）
+          WEB_PUSH_PRIVATE_KEY: ${{ secrets.STAGING_WEB_PUSH_PRIVATE_KEY }}
         run: python -m fx_alert check --mode multi --force
 
       # log 是公開的：再確認一次沒有任何 email 出現在這次產生的資料裡

@@ -71,11 +71,25 @@ class Resp:
         return self._body
 
 
+# 手機推播：推播網址、金鑰也不能出現在 log 裡
+ENDPOINT = "https://web.push.apple.com/ENDPOINT-SECRET-TOKEN"
+P256DH, AUTH = "B" + "P" * 86, "A" * 22
+PUSH_SECRETS = ["ENDPOINT-SECRET-TOKEN", "push.apple.com", P256DH, AUTH]
+
+
 class Session:
     """依網址回應：讀規則、讀旅程、計數、寫入都成功。"""
 
     def request(self, method, url, **kw):
         path = url.split("/rest/v1/")[1]
+        if method == "GET" and path == "feature_flags":
+            return Resp(body=[{"flag": "web_push", "enabled": True, "rollout": 100,
+                               "allowed_roles": ["admin", "beta"]}])  # fmt: skip
+        if method == "GET" and path == "push_subscriptions":
+            return Resp(body=[{"id": 5, "user_id": ALICE_ID, "endpoint": ENDPOINT,
+                               "p256dh": P256DH, "auth": AUTH, "fail_count": 0}])  # fmt: skip
+        if method == "GET" and path == "profiles":
+            return Resp(body=[{"user_id": ALICE_ID, "role": "user"}])
         if method == "GET" and path == "active_rules":
             return Resp(body=[rule(1, ALICE, ALICE_ID), rule(2, ALICE, ALICE_ID, WINDOW),
                               rule(3, CAROL, CAROL_ID)])  # fmt: skip
@@ -172,3 +186,27 @@ def test_labels_are_numbers_only():
     assert _row_to_watch(rule(7, ALICE, ALICE_ID)).label == "規則#7"
     assert _row_to_trip(TRIP).label == "旅程#12"
     assert D(TARGET)  # 只是確認測試資料是合法數字
+
+
+def test_push_output_has_no_personal_data(cli, capsys, monkeypatch):
+    """推播開啟：推播服務的錯誤訊息帶推播網址，log 裡也只能看到「規則#N：推播…」"""
+    monkeypatch.setenv("WEB_PUSH_PRIVATE_KEY", "k" * 43)
+
+    class Exc(Exception):
+        def __init__(self):
+            super().__init__(f"Push failed: 410 Gone {ENDPOINT} {P256DH}")
+            self.response = type("R", (), {"status_code": 410})()
+
+    def fake_webpush(**kw):
+        raise Exc()
+
+    import pywebpush
+
+    monkeypatch.setattr(pywebpush, "webpush", fake_webpush)
+    assert main_mod.main(cli) == 1  # carol 的信寄失敗（和上面相同）
+    out = capsys.readouterr()
+    text = out.out + out.err
+    assert "規則#1: 推播 0 台成功、1 台已失效、已移除" in text
+    assert "旅程#12: 推播" not in text  # 同一台已經移除，不會再送
+    for secret in SECRETS + PUSH_SECRETS:
+        assert secret not in text, secret

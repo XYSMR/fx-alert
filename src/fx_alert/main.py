@@ -22,6 +22,9 @@ check 每次執行：
 每天寄信上限（config.yaml 的 email.daily_limit）：超過的通知這次不寄、狀態不更新，
 下次排程再試；這不算錯誤，但會在 log 和 Actions 顯示警告。
 
+手機推播（多人版，有 WEB_PUSH_PRIVATE_KEY 時；push.py）：Email 寄出並記錄後，同一則提醒也推播到
+這個人的裝置。推播失敗不算錯誤（Email 已經寄出），只寫一行 log。
+
 出國換匯計畫（多人版，store 有 load_trips 時）：到價提醒之後，對每趟旅程用 trip_rules.decide 判斷
 今天要不要寄、寄哪一種（見 _check_trips）。和到價提醒共用通知時段、每日寄信上限、退訂連結。
 
@@ -59,6 +62,15 @@ from fx_alert.notifier import (
     redact_emails,
 )
 from fx_alert.parser import ParseError, get_cash_sell, parse_rates
+from fx_alert.push import (
+    DryRunSender,
+    PushConfig,
+    PushConfigError,
+    Pusher,
+    WebPushSender,
+    alert_payload,
+    trip_payload,
+)
 from fx_alert.rules import decide
 from fx_alert.store import (
     FileStore,
@@ -102,10 +114,12 @@ def run_check(
     store: RuleStore | None = None,
     unsubscribe: UnsubscribeConfig | None = None,
     track: Iterable[str] = (),
+    pusher: Pusher | None = None,
 ) -> CheckResult:
     """store 沒給就用單人版的 FileStore（config.yaml + state.json，收件人 MAIL_TO）。
 
     unsubscribe：多人版給；有 user_id 的規則，信裡會加上退訂連結和 List-Unsubscribe 標頭。
+    pusher：多人版、有設定推播金鑰時給；Email 寄出後也推播（push.py）。
     track：除了規則用到的幣別，另外要記錄走勢的幣別（多人版傳入全部 18 種）。
       這些幣別缺報價只記一行注意，不算錯誤；有人設定規則的幣別缺報價才算錯誤。
     """
@@ -121,7 +135,17 @@ def run_check(
     _convert_history(cfg, log)
     try:
         _check_rates(
-            cfg, store, notifier, email_cfg, local_now, fetch, result, log, unsubscribe, track
+            cfg,
+            store,
+            notifier,
+            email_cfg,
+            local_now,
+            fetch,
+            result,
+            log,
+            unsubscribe,
+            track,
+            pusher,
         )
     finally:
         # 不論成功失敗都記錄這次檢查，頁面才看得出系統還活著
@@ -150,7 +174,17 @@ def _convert_history(cfg: AppConfig, log: Callable[[str], None]) -> None:
 
 
 def _check_rates(
-    cfg, store, notifier, email_cfg, local_now, fetch, result, log, unsubscribe, track=()
+    cfg,
+    store,
+    notifier,
+    email_cfg,
+    local_now,
+    fetch,
+    result,
+    log,
+    unsubscribe,
+    track=(),
+    pusher=None,
 ) -> None:
     try:
         watches = store.load_watches()
@@ -234,6 +268,8 @@ def _check_rates(
                 if not store.record_alert(w, rate, local_now):
                     # 使用者剛好在檢查期間刪除帳號（或刪除規則）：略過，不算錯誤
                     log(f"{w.label}: 規則已不存在（可能剛刪除帳號），略過記錄")
+                elif pusher is not None:
+                    pusher.notify(w.user_id, alert_payload(rule.currency, rate), w.label)
             elif not store.record_transition(w, decision.next_state, rate, local_now):
                 # 規則被刪除、或狀態被使用者改過（例如重新開啟 Email）：這次不更新
                 log(f"{w.label}: 規則在檢查期間被變更或刪除，這次不更新")
@@ -242,7 +278,7 @@ def _check_rates(
             result.errors.append(f"{w.label} 狀態寫入失敗：{exc}")
 
     ctx = (cfg, store, notifier, email_cfg, local_now, board, rates, result, log, unsubscribe)
-    remaining = _check_trips(*ctx, remaining)
+    remaining = _check_trips(*ctx, remaining, pusher)
 
     if result.deferred:
         log(f"今天已達寄信上限 {cfg.daily_limit} 封，延後 {len(result.deferred)} 封到下次排程")
@@ -256,7 +292,18 @@ def _check_rates(
 
 
 def _check_trips(
-    cfg, store, notifier, email_cfg, local_now, board, rates, result, log, unsubscribe, remaining
+    cfg,
+    store,
+    notifier,
+    email_cfg,
+    local_now,
+    board,
+    rates,
+    result,
+    log,
+    unsubscribe,
+    remaining,
+    pusher=None,
 ) -> int:
     """出國換匯計畫：每趟旅程今天要不要寄提醒。回傳剩下還能寄幾封。
 
@@ -354,6 +401,8 @@ def _check_trips(
         try:
             if not store.record_trip_notice(t, decision, rate, local_now):
                 log(f"{t.label}: 提醒紀錄已存在或旅程剛被刪除，略過記錄")
+            elif pusher is not None:
+                pusher.notify(t.user_id, trip_payload(t.currency, decision, rate), t.label)
         except StoreError as exc:
             result.errors.append(f"{t.label} 換匯提醒紀錄寫入失敗：{exc}")
     return remaining
@@ -383,11 +432,13 @@ def _write_github_output(result: CheckResult) -> None:
 def _cmd_check(args) -> int:
     store: RuleStore | None = None
     unsubscribe: UnsubscribeConfig | None = None
+    push_cfg: PushConfig | None = None
     try:
         cfg = load_config(args.config)
         if args.mode == "multi":
             store = SupabaseStore(SupabaseConfig.from_env())
             unsubscribe = _unsubscribe_config(required=not args.dry_run)
+            push_cfg = PushConfig.from_env()  # 沒設定就不推播（Email 照常）
             if args.dry_run:
                 store = ReadOnlyStore(store)
         if args.dry_run:
@@ -398,20 +449,26 @@ def _cmd_check(args) -> int:
         else:
             email_cfg = EmailConfig.from_env(require_to=args.mode == "single")
             notifier = SmtpNotifier(email_cfg)
-    except (ConfigFileError, ConfigError, StoreError, UnsubscribeError) as exc:
+    except (ConfigFileError, ConfigError, StoreError, UnsubscribeError, PushConfigError) as exc:
         print(f"設定錯誤：{exc}", file=sys.stderr)
         return 1
 
+    now = datetime.now(TAIPEI)
+    pusher = None
+    if push_cfg is not None and store is not None:
+        sender = DryRunSender() if args.dry_run else WebPushSender(push_cfg)
+        pusher = Pusher(store, sender, now=now, log=_public_log)
     result = run_check(
         cfg,
         notifier,
         email_cfg,
-        now=datetime.now(TAIPEI),
+        now=now,
         force=args.force,
         log=_public_log,
         store=store,
         unsubscribe=unsubscribe,
         track=CODES if args.mode == "multi" else (),  # 多人版記錄全部 18 種幣別的走勢
+        pusher=pusher,
     )
     for err in result.errors:
         print(f"錯誤：{redact_emails(err)}", file=sys.stderr)

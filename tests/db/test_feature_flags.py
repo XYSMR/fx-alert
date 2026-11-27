@@ -64,13 +64,15 @@ def as_uid(db, user_id: str) -> None:
 
 def test_production_defaults(db):
     """套用全部 migration 後 = 正式專案的預設值（PM 決定）：
-    trip_plan 已上線維持全開（flag 只當 kill switch）；quick_target 關閉。"""
+    trip_plan 已上線維持全開（flag 只當 kill switch）；quick_target 關閉；
+    web_push（手機推播，20261128021121）關閉，12/15 Demo 之後才開。"""
     db.as_anon()
     assert db.rows(
         "select flag, enabled, rollout, allowed_roles from public.feature_flags order by flag"
     ) == [
         ("quick_target", False, 0, ["admin", "beta"]),
         ("trip_plan", True, 100, ["admin", "beta"]),
+        ("web_push", False, 0, ["admin", "beta"]),
     ]
 
 
@@ -86,7 +88,7 @@ def test_quick_target_is_off_for_everyone_by_default(db, alice, bob):
 def test_everyone_can_read_flags_but_nobody_can_change_them_through_the_api(db, alice):
     for who in ("anon", "user"):
         db.as_anon() if who == "anon" else db.as_user(alice)
-        assert db.one("select count(*) from public.feature_flags") == 2
+        assert db.one("select count(*) from public.feature_flags") == 3
         db.fails("update public.feature_flags set enabled = false", sqlstate=DENIED)
         db.fails("delete from public.feature_flags", sqlstate=DENIED)
         db.fails(
@@ -236,6 +238,7 @@ def test_staging_config_opens_quick_target_to_admin_and_beta_only(db, alice, bob
     assert flag_rows(db) == [
         ("quick_target", True, 0, ["admin", "beta"]),
         ("trip_plan", True, 100, ["admin", "beta"]),
+        ("web_push", False, 0, ["admin", "beta"]),  # 這個腳本不動 web_push
     ]
     set_role(db, bob, "beta")
     db.as_user(alice)

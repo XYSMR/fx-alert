@@ -1,0 +1,42 @@
+{
+  "_說明": "推播網址白名單的測試案例。資料庫（is_allowed_push_endpoint）和寄送端（PR 4）都要通過同一份。網址裡的 token 都是假的。超過 2048 字的網址由測試程式產生。",
+  "allowed": [
+    "https://web.push.apple.com/QGuQyavXutnMH2wGfAkhHlbBQ4cJxIhFMkqOOdcAbDOg",
+    "https://api.push.apple.com/3/device/fake-token",
+    "https://fcm.googleapis.com/fcm/send/dpH5lCsTSSM:APA91bHqjZxM0VImWWqDRN7U0a3AycjUf",
+    "https://updates.push.services.mozilla.com/wpush/v2/gAAAAABfake",
+    "https://wns2-par02p.notify.windows.com/w/?token=BQYAAAfake%3d"
+  ],
+  "denied": {
+    "包含 push.apple.com，但不是以它結尾": "https://evil.push.apple.com.attacker.com/x",
+    "結尾字串相同，但不在網域邊界上": "https://evilpush.apple.com/x",
+    "沒有子網域": "https://push.apple.com/x",
+    "http 不是 https": "http://web.push.apple.com/x",
+    "大寫的 HTTPS": "HTTPS://web.push.apple.com/x",
+    "指定 port": "https://web.push.apple.com:8443/x",
+    "帳號在 @ 前面": "https://user@web.push.apple.com/x",
+    "真正的主機在 @ 後面": "https://web.push.apple.com@attacker.com/x",
+    "結尾多一個點": "https://web.push.apple.com./x",
+    "沒有路徑": "https://web.push.apple.com",
+    "用問號接主機名稱": "https://attacker.com?.push.apple.com/x",
+    "反斜線": "https://attacker.com\\.push.apple.com/x",
+    "換行": "https://web.push.apple.com/x\nhttps://attacker.com/",
+    "空白": "https://web.push.apple.com/a b",
+    "fcm 的相似網域": "https://fcm.googleapis.com.attacker.com/x",
+    "fcm 加子網域": "https://evil.fcm.googleapis.com/x",
+    "mozilla 的相似網域": "https://updates.push.services.mozilla.com.evil.org/x",
+    "windows 的相似網域": "https://evil.notify.windows.com.attacker.com/x",
+    "IP 位址": "https://169.254.169.254/latest/meta-data",
+    "本機": "https://localhost/x",
+    "其他網站": "https://attacker.com/x",
+    "空字串": ""
+  },
+  "redirect_statuses": [
+    301,
+    302,
+    303,
+    307,
+    308
+  ],
+  "_redirect_說明": "寄送端（PR 4）收到這些狀態碼一律當成失敗，不跟隨 Location。"
+}

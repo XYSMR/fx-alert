@@ -116,7 +116,11 @@
   if (typeof module !== "undefined" && module.exports) {
     module.exports = exported;
   } else {
-    window.FxPwa = { activeVersion: () => activeVersion(navigator) };
+    window.FxPwa = {
+      activeVersion: () => activeVersion(navigator),
+      installHint: () => installHint(window),
+      isIos: () => isIos(navigator.userAgent, navigator.maxTouchPoints),
+    };
     showInstallHelp(window);
     register(window);
   }

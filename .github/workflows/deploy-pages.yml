@@ -78,7 +78,7 @@ jobs:
           mkdir _site
           cp -r site/index.html site/style.css site/app.js site/flags.js site/trips.js site/account.js site/vendor \
             site/data.json site/history site/unsubscribe.html site/unsubscribe.js site/privacy.html \
-            site/pwa.js site/sw.js site/manifest.webmanifest site/icons _site/
+            site/pwa.js site/push.js site/sw.js site/manifest.webmanifest site/icons _site/
           find _site -type f | sort
 
       # 登入功能開關（GitHub → Settings → Variables，不是 Secrets：這些值本來就公開）
@@ -88,6 +88,8 @@ jobs:
           AUTH_ENABLED: ${{ vars.AUTH_ENABLED }}
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+          # 手機推播的 VAPID 公鑰（公開的；私鑰只在 runtime Environment）。沒設定時網頁顯示「推播尚未設定」
+          WEB_PUSH_PUBLIC_KEY: ${{ vars.WEB_PUSH_PUBLIC_KEY }}
         run: |
           python -m fx_alert site-config --out _site/config.js
           if [ "${AUTH_ENABLED,,}" != "true" ] && grep -qi supabase _site/config.js; then

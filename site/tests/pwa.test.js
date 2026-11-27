@@ -18,10 +18,22 @@ function pngSize(file) {
 }
 
 /** 在假的 service worker 環境執行 sw.js，回傳註冊的事件和呼叫紀錄 */
-function loadServiceWorker() {
+const SCOPE = "https://xysmr.github.io/fx-alert/";
+
+function loadServiceWorker({ windows = [] } = {}) {
   const listeners = {};
   const calls = [];
+  const shown = [];
+  const opened = [];
   const self = {
+    location: new URL(SCOPE + "sw.js"),
+    registration: {
+      scope: SCOPE,
+      showNotification(title, options) {
+        shown.push({ title, options });
+        return Promise.resolve();
+      },
+    },
     addEventListener(type, fn) {
       (listeners[type] ||= []).push(fn);
     },
@@ -34,11 +46,25 @@ function loadServiceWorker() {
         calls.push("claim");
         return Promise.resolve();
       },
+      matchAll: () => Promise.resolve(windows),
+      openWindow(url) {
+        opened.push(url);
+        return Promise.resolve();
+      },
     },
   };
-  vm.runInNewContext(read("sw.js"), { self });
-  return { listeners, calls };
+  vm.runInNewContext(read("sw.js"), { self, URL });
+  return { listeners, calls, shown, opened };
 }
+
+/** 觸發一個 service worker 事件，等 waitUntil 裡的工作做完 */
+async function fire(listeners, type, event) {
+  const pending = [];
+  for (const fn of listeners[type]) fn({ ...event, waitUntil: (p) => pending.push(p) });
+  await Promise.all(pending);
+}
+
+const pushData = (obj) => ({ json: () => (typeof obj === "string" ? JSON.parse(obj) : obj) });
 
 // ---------- manifest ----------
 
@@ -237,4 +263,71 @@ test("showInstallHelp：只顯示符合裝置的那一段；從主畫面打開�
   const b = fakeDoc();
   pwa.showInstallHelp({ ...fakeWin({ standaloneMedia: true }), document: b.document });
   assert.equal(b.box.hidden, true);
+});
+
+// ---------- sw.js：推播 ----------
+
+test("push：顯示 payload 的標題和內容，點開的網址只能是本站", async () => {
+  const { listeners, shown } = loadServiceWorker();
+  await fire(listeners, "push", {
+    data: pushData({ title: "日圓到價：0.2040", body: "兆豐銀行現金賣出價", url: "./#JPY", tag: "rate-JPY" }),
+  });
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0].title, "日圓到價：0.2040");
+  assert.equal(shown[0].options.body, "兆豐銀行現金賣出價");
+  assert.equal(shown[0].options.tag, "rate-JPY");
+  assert.equal(shown[0].options.data.url, SCOPE + "#JPY");
+});
+
+test("push：壞掉或空的 payload 也一定顯示一則通知（iPhone 的規定）", async () => {
+  for (const data of [null, pushData("not json"), pushData({}), pushData({ title: "  " })]) {
+    const { listeners, shown } = loadServiceWorker();
+    await fire(listeners, "push", { data });
+    assert.equal(shown.length, 1);
+    assert.equal(shown[0].title, "FX Alert 匯率提醒");
+    assert.equal(shown[0].options.data.url, SCOPE);
+  }
+});
+
+test("push：外部網址、javascript:、同網域但不在網站底下的網址一律改成首頁", async () => {
+  const bad = [
+    "https://attacker.com/",
+    "javascript:alert(1)",
+    "//attacker.com/x",
+    "https://xysmr.github.io/other-repo/",
+    "https://xysmr.github.io.attacker.com/fx-alert/",
+  ];
+  for (const url of bad) {
+    const { listeners, shown } = loadServiceWorker();
+    await fire(listeners, "push", { data: pushData({ title: "t", url }) });
+    assert.equal(shown[0].options.data.url, SCOPE, url);
+  }
+});
+
+test("push：標題和內容有長度上限", async () => {
+  const { listeners, shown } = loadServiceWorker();
+  await fire(listeners, "push", { data: pushData({ title: "a".repeat(500), body: "b".repeat(500) }) });
+  assert.equal(shown[0].title.length, 80);
+  assert.equal(shown[0].options.body.length, 200);
+});
+
+test("notificationclick：已經開著網站就切過去並跳到那個幣別；沒有就開新視窗", async () => {
+  const notification = { closed: false, close() { this.closed = true; }, data: { url: SCOPE + "#JPY" } };
+  const win = {
+    url: SCOPE,
+    focused: false,
+    navigated: null,
+    focus() { this.focused = true; return Promise.resolve(this); },
+    navigate(u) { this.navigated = u; return Promise.resolve(this); },
+  };
+  const a = loadServiceWorker({ windows: [win] });
+  await fire(a.listeners, "notificationclick", { notification });
+  assert.ok(notification.closed);
+  assert.equal(win.focused, true);
+  assert.equal(win.navigated, SCOPE + "#JPY");
+  assert.deepEqual(a.opened, []);
+
+  const b = loadServiceWorker({ windows: [{ url: "https://example.com/" }] });
+  await fire(b.listeners, "notificationclick", { notification: { ...notification, data: { url: "https://attacker.com" } } });
+  assert.deepEqual(b.opened, [SCOPE]);
 });

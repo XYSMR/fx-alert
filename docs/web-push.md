@@ -1,6 +1,6 @@
 # 手機推播（PWA＋Web Push）設計
 
-狀態：PR 1（PWA 基礎）已合併；PR 2（資料表）進行中。推播本身在 PR 2～4，正式專案的開放排在 12/15 A10 Demo 之後。
+狀態：PR 1（PWA 基礎）、PR 2（資料表）已合併並套用；PR 3（訂閱介面）進行中。推播本身在 PR 2～4，正式專案的開放排在 12/15 A10 Demo 之後。
 
 ## 已決定的事
 
@@ -44,6 +44,43 @@ migration：`supabase/migrations/20261128021121_push_subscriptions.sql`
 - 刪除帳號：裝置一起刪除。
 - **只新增、不修改**：這個 migration 只新增推播自己的物件和一筆預設關閉的 flag，
   `tests/test_push_migration_scope.py` 逐句檢查，確保不會影響 Demo 用的 `trip_plan`、`quick_target` 和 Email 提醒。
+
+## 網頁訂閱介面（PR 3）
+
+設定頁「推播通知」區塊（`site/push.js`），`web_push` 對這個人開啟時才顯示：
+
+- 依裝置顯示：可以開啟（「開啟推播」按鈕）、iPhone 還沒加到主畫面（教加入主畫面）、
+  之前拒絕過（教到系統設定打開）、瀏覽器不支援、還沒設定 VAPID 公鑰。
+- 裝置列表：每台裝置的名稱、最後送達時間、「移除」；這台裝置是「關閉這台」。
+- Email 和推播的關係表格（見下方）一直顯示在這個區塊裡。
+- **每次打開網站都重新同步**（`resyncAction`）：
+  - 瀏覽器有訂閱、資料庫也有 → 更新金鑰和 `last_seen_at`
+  - 瀏覽器的訂閱不見了（例如 Apple 換了推播網址），資料庫還有 → 重新訂閱、換成新網址
+  - 資料庫已經沒有（在別台裝置移除了）→ 不自動加回去
+- **登出時停止這台裝置的推播**（刪除這台的訂閱並取消瀏覽器的訂閱），下一個登入的人要自己重新開啟。
+- `sw.js` 收到推播一定顯示通知（iPhone 的規定），點通知只會打開本站的網址。
+
+### VAPID 金鑰（你自己產生，正式專案和 staging 各一組）
+
+```bash
+node scripts/vapid_keygen.js ../staging.vapid      # 私鑰寫進檔案（不會印在畫面上），畫面只印公鑰
+node scripts/vapid_keygen.js ../production.vapid
+```
+
+| 放哪裡 | staging | 正式專案 |
+|---|---|---|
+| 公鑰 | 本機 `WEB_PUSH_PUBLIC_KEY`（產生 config.js 時） | GitHub Variables `WEB_PUSH_PUBLIC_KEY` |
+| 私鑰（檔案內容） | Environment `staging-runtime` 的 Secret `WEB_PUSH_PRIVATE_KEY` | Environment `production-runtime` 的 Secret `WEB_PUSH_PRIVATE_KEY` |
+
+私鑰貼進 Secret 之後就刪掉 `.vapid` 檔案（`.gitignore` 已排除 `*.vapid`）。
+換金鑰之後，所有裝置的舊訂閱都會失效，使用者下次打開網站時會自動用新公鑰重新訂閱。
+
+### 給 PR 4（寄送端）的注意事項
+
+- 目前 Email 關閉（`email_enabled = false`）的人，排程完全不檢查他的提醒。
+  推播和 Email 互相獨立，所以 PR 4 要改成：Email 關閉但有推播裝置的人照樣檢查、只送推播。
+- 推播內容的格式：`{"title": "日圓到價：0.2040", "body": "…", "url": "./#JPY", "tag": "rate-JPY"}`，
+  不放目標價、金額或 email。
 
 ## 推播網址白名單（PR 2、PR 4）
 

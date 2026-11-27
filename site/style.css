@@ -281,3 +281,8 @@ button.link { font: inherit; background: none; border: 0; padding: 0; color: var
 .trip-steps .step-today { font-weight: 600; }
 .trip-exchange { margin-top: 4px; }
 .disclaimer { margin: 6px 0 4px; font-size: .9rem; color: var(--muted); font-weight: 600; }
+
+/* ---------- 加到手機主畫面（pwa.js） ---------- */
+.install-help { margin-bottom: 8px; }
+.install-help summary { cursor: pointer; color: var(--blue); }
+.install-help p { margin: 6px 0 0; line-height: 1.6; }

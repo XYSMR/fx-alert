@@ -9,6 +9,11 @@
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co http://127.0.0.1:54321; base-uri 'self'; form-action 'self'">
   <link rel="stylesheet" href="style.css">
+  <!-- PWA：可以加入手機主畫面（pwa.js、sw.js；說明見 docs/web-push.md） -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#2f5fb3">
+  <meta name="apple-mobile-web-app-title" content="FX Alert">
 </head>
 <body>
   <header class="page-header">
@@ -141,6 +146,12 @@
   </main>
 
   <footer class="page-footer">
+    <!-- pwa.js 依裝置顯示其中一段；已經從主畫面打開時整段不顯示 -->
+    <details class="install-help" id="install-help" hidden>
+      <summary>加到手機主畫面</summary>
+      <p data-install="ios" hidden>iPhone／iPad：用 Safari 打開這個網頁，點下方的「分享」按鈕，選「加入主畫面」。之後從主畫面的 FX Alert 圖示打開，就會像 App 一樣全螢幕顯示。</p>
+      <p data-install="other" hidden>Android 或電腦：在瀏覽器選單裡選「安裝應用程式」或「加到主畫面」。</p>
+    </details>
     <p>資料產生於 <span id="generated-at">—</span><span id="preview-note"></span>・<a id="repo-link" href="https://github.com/XYSMR/fx-alert">原始碼</a><span id="privacy-note" hidden>・<a href="privacy.html">隱私說明</a></span></p>
   </footer>
 
@@ -152,5 +163,6 @@
   <script src="trips.js"></script>
   <script src="account.js"></script>
   <script src="app.js"></script>
+  <script src="pwa.js"></script>
 </body>
 </html>

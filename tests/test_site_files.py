@@ -89,3 +89,17 @@ def test_chart_summary_is_for_screen_readers_only():
     tag = re.search(r'<[^>]*\sid="chart-summary"[^>]*>', INDEX)
     assert tag and 'class="visually-hidden"' in tag.group(0)
     assert 'aria-describedby="chart-summary"' in INDEX
+
+
+def test_privacy_page_explains_web_push():
+    """手機推播：存了什麼、鎖定畫面看得到什麼、怎麼關、和 Email 的關係、刪除帳號一起刪"""
+    page = (SITE / "privacy.html").read_text(encoding="utf-8")
+    for text in (
+        "推播網址和加密金鑰",
+        "鎖定畫面",
+        "不會有你的目標價",
+        "取消 Email 訂閱不會關掉推播",
+        "登出也會停止這台裝置的推播",
+        "通知紀錄和推播裝置會立刻一起刪除",
+    ):
+        assert text in page, text

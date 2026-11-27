@@ -1,6 +1,6 @@
 # 手機推播（PWA＋Web Push）設計
 
-狀態：PR 1（PWA 基礎）。推播本身在 PR 2～4，正式專案的開放排在 12/15 A10 Demo 之後。
+狀態：PR 1（PWA 基礎）已合併；PR 2（資料表）進行中。推播本身在 PR 2～4，正式專案的開放排在 12/15 A10 Demo 之後。
 
 ## 已決定的事
 
@@ -26,6 +26,25 @@
 PR 2 的 migration **只新增資料表、函式和一筆預設關閉的 flag**，不修改任何現有資料表、函式或 flag，
 所以 Demo 用到的 `quick_target`、`trip_plan` 和 Email 提醒都不受影響。
 
+## 資料表 `push_subscriptions`（PR 2）
+
+migration：`supabase/migrations/20261128021121_push_subscriptions.sql`
+
+| 誰 | 可以做什麼 |
+|---|---|
+| 使用者 | 看自己的裝置（不含加密金鑰）、改裝置名稱、刪除裝置 |
+| 使用者新增或重新同步 | 只能呼叫 `save_push_subscription()`：要登入、`web_push` 對這個人是開的，否則 403 |
+| 排程（service_role） | 讀金鑰、記錄成功時間和失敗次數、刪除失效的訂閱 |
+
+- 每人最多 5 台裝置；重新同步已經有的裝置不算新增。
+- 同一台裝置換人登入：同一個推播網址改歸新帳號，舊帳號的裝置名稱和成功紀錄不帶過去。
+  推播網址只有那台裝置的瀏覽器知道，所以拿得到網址就代表在用那台裝置。
+- `last_seen_at`：網頁每次打開都會更新。Apple 對失效的訂閱可能還是回 200，之後可以用它找出很久沒出現的裝置。
+- `web_push` 關閉時：不能新增，已經有的裝置還在，看得到也刪得掉。
+- 刪除帳號：裝置一起刪除。
+- **只新增、不修改**：這個 migration 只新增推播自己的物件和一筆預設關閉的 flag，
+  `tests/test_push_migration_scope.py` 逐句檢查，確保不會影響 Demo 用的 `trip_plan`、`quick_target` 和 Email 提醒。
+
 ## 推播網址白名單（PR 2、PR 4）
 
 瀏覽器訂閱推播時會給一個推播網址（endpoint），我們的排程之後會對這個網址發送請求。
@@ -45,7 +64,7 @@ PR 2 的 migration **只新增資料表、函式和一筆預設關閉的 flag**�
 
 3. 寄送時**不跟隨轉址**：推播服務回 3xx 一律當成失敗，不會再去連 `Location` 的網址。
 
-一定要被擋下的例子（PR 2、PR 4 都會有測試）：
+一定要被擋下的例子（完整清單在 `tests/fixtures/push_endpoints.json`，資料庫和寄送端共用）：
 
 - `https://evil.push.apple.com.attacker.com/...`：包含 `push.apple.com`，但不是以它結尾
 - `https://evilpush.apple.com/...`：結尾字串相同，但不在網域邊界上

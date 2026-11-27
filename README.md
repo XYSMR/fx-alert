@@ -188,6 +188,7 @@ Environment 限定 `main` 之後，只有合併進 main 的 workflow 拿得到�
 | `SMTP_USER` | 寄件 Gmail 帳號 |
 | `SMTP_PASSWORD` | Gmail **應用程式密碼**（帳號需開啟兩步驟驗證） |
 | `HEALTHCHECK_PING_URL` | （選用）healthchecks.io 的 ping 網址；等同密碼 |
+| `WEB_PUSH_PRIVATE_KEY` | （選用）手機推播的 VAPID **私鑰**（43 字，`scripts/vapid_keygen.js` 產生）。沒設定 = 不推播，Email 照常 |
 
 ### GitHub Environment `staging-runtime`（Settings → Environments）
 
@@ -196,6 +197,7 @@ Environment 限定 `main` 之後，只有合併進 main 的 workflow 拿得到�
 | Environment secret | 內容 |
 |---|---|
 | `STAGING_SUPABASE_URL`、`STAGING_SUPABASE_SECRET_KEY`、`STAGING_UNSUBSCRIBE_SECRET` | staging 專案 |
+| `STAGING_WEB_PUSH_PRIVATE_KEY` | （選用）staging 自己的推播私鑰（和正式專案不同組） |
 | `SMTP_USER`、`SMTP_PASSWORD` | 和 `production-runtime` 相同 |
 
 **Repository secrets（Settings → Secrets and variables → Actions）應該是空的。**
@@ -347,7 +349,7 @@ commit 到 `state` 分支、部署 `data.json` 前都會自動掃描，確認沒
 ### 進行中：網站做成 PWA、手機推播通知
 
 設計和決定都在 [`docs/web-push.md`](docs/web-push.md)。目前完成 PR 1：網站可以「加到主畫面」（manifest、圖示、`sw.js`），
-PR 2 資料表、PR 3 設定頁的訂閱介面；寄送（PR 4）還沒做。正式專案的推播等 12/15 A10 Demo 之後才開放。
+PR 2 資料表、PR 3 設定頁的訂閱介面、PR 4 寄送（Email 寄出後也推播）。正式專案的推播等 12/15 A10 Demo 之後才開放。
 
 修改 `site/sw.js` 時，請把裡面的 `SW_VERSION` 改成新的日期；使用者手機怎麼更新到新版，見 `docs/web-push.md`。
 

@@ -140,6 +140,8 @@ jobs:
           UNSUBSCRIBE_SECRET: ${{ secrets.UNSUBSCRIBE_SECRET }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          # 手機推播的 VAPID 私鑰（沒設定 = 不推播，Email 照常）
+          WEB_PUSH_PRIVATE_KEY: ${{ secrets.WEB_PUSH_PRIVATE_KEY }}
           FORCE: ${{ inputs.force && '--force' || '' }}
           DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
         run: |

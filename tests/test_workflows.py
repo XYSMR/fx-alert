@@ -368,3 +368,14 @@ def test_pwa_files_are_deployed_at_the_site_root():
     for icon in manifest["icons"]:
         assert (site / icon["src"]).exists(), icon["src"]
         assert _is_assembled(icon["src"], assembled), icon["src"]
+
+
+def test_push_private_key_comes_from_the_right_environment():
+    """正式排程用 production-runtime 的 WEB_PUSH_PRIVATE_KEY；staging 用自己的
+    STAGING_WEB_PUSH_PRIVATE_KEY（兩組金鑰不同，不能互用）。私鑰不能出現在網站部署。"""
+    prod = read("check-rates.yml")
+    assert "WEB_PUSH_PRIVATE_KEY: ${{ secrets.WEB_PUSH_PRIVATE_KEY }}" in prod
+    staging = read("staging-check.yml")
+    assert staging.count("WEB_PUSH_PRIVATE_KEY: ${{ secrets.STAGING_WEB_PUSH_PRIVATE_KEY }}") == 2
+    assert "secrets.WEB_PUSH_PRIVATE_KEY" not in staging
+    assert "WEB_PUSH_PRIVATE_KEY" not in read("deploy-pages.yml")

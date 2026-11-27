@@ -1,6 +1,6 @@
 # 手機推播（PWA＋Web Push）設計
 
-狀態：PR 1（PWA 基礎）、PR 2（資料表）已合併並套用；PR 3（訂閱介面）進行中。推播本身在 PR 2～4，正式專案的開放排在 12/15 A10 Demo 之後。
+狀態：PR 1～3 已合併；PR 4（寄送）進行中。推播本身在 PR 2～4，正式專案的開放排在 12/15 A10 Demo 之後。
 
 ## 已決定的事
 
@@ -70,17 +70,42 @@ node scripts/vapid_keygen.js ../production.vapid
 | 放哪裡 | staging | 正式專案 |
 |---|---|---|
 | 公鑰 | 本機 `WEB_PUSH_PUBLIC_KEY`（產生 config.js 時） | GitHub Variables `WEB_PUSH_PUBLIC_KEY` |
-| 私鑰（檔案內容） | Environment `staging-runtime` 的 Secret `WEB_PUSH_PRIVATE_KEY` | Environment `production-runtime` 的 Secret `WEB_PUSH_PRIVATE_KEY` |
+| 私鑰（檔案內容） | Environment `staging-runtime` 的 Secret `STAGING_WEB_PUSH_PRIVATE_KEY` | Environment `production-runtime` 的 Secret `WEB_PUSH_PRIVATE_KEY` |
 
 私鑰貼進 Secret 之後就刪掉 `.vapid` 檔案（`.gitignore` 已排除 `*.vapid`）。
-換金鑰之後，所有裝置的舊訂閱都會失效，使用者下次打開網站時會自動用新公鑰重新訂閱。
+換金鑰之後，所有裝置的舊訂閱都會失效：網頁下次打開時發現訂閱用的是舊公鑰，會自動用新公鑰重新訂閱（`keyMatches`）。
 
-### 給 PR 4（寄送端）的注意事項
+## 寄送（PR 4，`src/fx_alert/push.py`）
 
-- 目前 Email 關閉（`email_enabled = false`）的人，排程完全不檢查他的提醒。
-  推播和 Email 互相獨立，所以 PR 4 要改成：Email 關閉但有推播裝置的人照樣檢查、只送推播。
-- 推播內容的格式：`{"title": "日圓到價：0.2040", "body": "…", "url": "./#JPY", "tag": "rate-JPY"}`，
-  不放目標價、金額或 email。
+Email 寄出、記錄完之後，同一則提醒也推播到這個人的裝置（`Pusher.notify`）：
+
+- `web_push` 對這個人沒開（含 kill switch）→ 不推。判斷和網頁、RLS 相同（`flags.py`）。
+  flag 關閉時連裝置都不讀。
+- 每人每天最多 10 則（當天的到價通知＋換匯提醒紀錄一起算）。
+- 寄送前再檢查一次白名單；**不跟隨轉址**（自訂的 requests session 強制 `allow_redirects=False`，
+  測試真的起一個會轉址的伺服器確認）。
+- 結果：2xx → 記錄送達、失敗次數歸零；404／410 → 刪除這台；其他（含 3xx、401／403、5xx、連不上）
+  → 失敗次數 +1，連續 10 次刪除。
+- 推播失敗不算這次檢查的錯誤（Email 已經寄出），只寫一行 log，例如「規則#7: 推播 1 台成功、1 台已失效、已移除」。
+  不寫推播網址、金鑰、推播服務的回應內容。
+- 每次送出都用新的 VAPID claims：pywebpush 會把第一個網址的 `aud` 寫回傳入的 dict，重用會讓其他推播服務拒絕。
+- VAPID 的 `sub` 預設 `https://xysmr.github.io`（不用 email；py_vapid 只接受不帶路徑的網址）。
+- `--dry-run`：不送出、不寫資料庫。
+
+推播內容（鎖定畫面看得到，不放目標價、金額、出發日、email）：
+
+| 提醒 | 標題 | 內容 |
+|---|---|---|
+| 到價 | 日圓到價：0.2040 | 兆豐銀行現金賣出價・點開查看 |
+| 換匯計畫（價格） | 日圓換匯計畫：0.2040，近 30 天第 3 低 | 距離出發 40 天・僅供參考，不保證未來匯率走勢 |
+| 換匯計畫（最後） | 日圓最後換匯提醒（距離出發 7 天） | 點開查看換匯進度 |
+
+### 還沒做：Email 關閉的人只收推播（Demo 之後的 PR）
+
+目前 `active_rules`、`active_trips` 只列出 Email 開啟的人，所以 **Email 關閉的人不會被檢查，也就收不到推播**。
+要做到設定頁說的「退訂 Email，推播照送」，必須修改這兩個 view 和寄送流程（Email 關閉的人只推播、不寄信）。
+這會動到 Demo 正在用的到價提醒，所以排在 12/15 Demo 之後、正式開放 `web_push` 之前做。
+在那之前 `web_push` 只開給 admin、beta 測試。
 
 ## 推播網址白名單（PR 2、PR 4）
 

@@ -270,22 +270,82 @@ class SupabaseStore:
         """換匯計畫的提醒（每日上限是 Gmail 的寄信量，和到價通知一起算；有旅程要寄時才查）。"""
         return self._count("trip_notifications", since)
 
-    def _count(self, table: str, since: datetime) -> int:
-        resp = self._request(
-            "GET",
-            table,
-            params={
-                "select": "id",
-                "sent_at": f"gte.{since.isoformat(timespec='seconds')}",
-                "limit": "1",
-            },
-            headers={"Prefer": "count=exact"},
-        )
+    def _count(self, table: str, since: datetime, user_id: str | None = None) -> int:
+        params = {
+            "select": "id",
+            "sent_at": f"gte.{since.isoformat(timespec='seconds')}",
+            "limit": "1",
+        }
+        if user_id is not None:
+            params["user_id"] = f"eq.{user_id}"
+        resp = self._request("GET", table, params=params, headers={"Prefer": "count=exact"})
         # Content-Range 長得像 "0-0/12" 或 "*/0"
         total = resp.headers.get("Content-Range", "").rpartition("/")[2]
         if not total.isdigit():
             raise StoreError("Supabase 沒有回傳通知數量")
         return int(total)
+
+    # ---- 手機推播（push.py） ----
+
+    def load_push_targets(self) -> tuple[dict, list, dict[str, str]]:
+        """web_push flag、所有推播裝置（含金鑰，只有 secret key 讀得到）、有裝置的人的角色。
+        flag 關閉（kill switch）時不讀裝置。"""
+        from fx_alert.push import FLAG, Device
+
+        rows = self._request(
+            "GET",
+            "feature_flags",
+            params={"select": "flag,enabled,rollout,allowed_roles", "flag": f"eq.{FLAG}"},
+        ).json()
+        flags = {r["flag"]: r for r in rows}
+        if not flags.get(FLAG, {}).get("enabled"):
+            return flags, [], {}
+        devices = [
+            Device(
+                id=int(r["id"]),
+                user_id=str(r["user_id"]),
+                endpoint=r["endpoint"],
+                p256dh=r["p256dh"],
+                auth=r["auth"],
+                fail_count=int(r.get("fail_count") or 0),
+            )
+            for r in self._request(
+                "GET",
+                "push_subscriptions",
+                params={"select": "id,user_id,endpoint,p256dh,auth,fail_count", "order": "id"},
+            ).json()
+        ]
+        users = sorted({d.user_id for d in devices})
+        roles: dict[str, str] = {}
+        for i in range(0, len(users), 100):
+            chunk = users[i : i + 100]
+            for r in self._request(
+                "GET",
+                "profiles",
+                params={"select": "user_id,role", "user_id": f"in.({','.join(chunk)})"},
+            ).json():
+                roles[str(r["user_id"])] = r.get("role") or "user"
+        return flags, devices, roles
+
+    def count_user_sent_since(self, user_id: str, since: datetime) -> int:
+        """這個人今天收到幾則提醒（到價＋換匯計畫）：推播的每人每日上限用"""
+        return self._count("notifications", since, user_id) + self._count(
+            "trip_notifications", since, user_id
+        )
+
+    def record_push_result(self, device, outcome: str, now: datetime) -> None:
+        """ok：記錄送達、失敗次數歸零；failed：失敗次數 +1；delete：刪除這台裝置"""
+        path = f"push_subscriptions?id=eq.{int(device.id)}"
+        if outcome == "delete":
+            self._request("DELETE", path)
+        elif outcome == "ok":
+            self._request(
+                "PATCH",
+                path,
+                json={"last_success_at": now.isoformat(timespec="seconds"), "fail_count": 0},
+            )
+        else:
+            self._request("PATCH", path, json={"fail_count": device.fail_count + 1})
 
     # ---- 出國換匯計畫 ----
 
@@ -443,6 +503,15 @@ class ReadOnlyStore:
     def record_trip_notice(self, trip, decision, rate, now) -> bool:
         self._log(f"[dry-run] {trip.label}: 不寫入換匯提醒 {decision.kind}")
         return True
+
+    def load_push_targets(self):
+        return self._inner.load_push_targets()
+
+    def count_user_sent_since(self, user_id: str, since: datetime) -> int:
+        return self._inner.count_user_sent_since(user_id, since)
+
+    def record_push_result(self, device, outcome: str, now: datetime) -> None:
+        self._log(f"[dry-run] 不寫入推播結果（{outcome}）")
 
     def record_check(self, at: datetime, ok: bool, errors: int) -> None:
         self._log(f"[dry-run] 不寫入檢查狀態（ok={ok}、錯誤 {errors} 個）")

@@ -81,6 +81,20 @@
 **這不是投資建議**：信件和網頁只寫事實（第幾低、還有幾天、哪天寄信），不預估匯率會漲或跌，也不建議什麼時候該換。
 僅供參考，不保證未來匯率走勢；實際匯率以兆豐銀行公告為準。
 
+## 手機推播（測試中）
+
+除了 Email，也可以讓到價提醒和換匯計畫提醒推播到手機或電腦（目前只開放給測試帳號）：
+
+1. iPhone：用 Safari 打開網站 →「分享」→「加入主畫面」，之後從主畫面的 FX Alert 圖示打開。
+   Android 和電腦不用加到主畫面。
+2. 登入 →「設定提醒」→「推播通知」→「開啟推播」，看完說明按「好，開啟」，再允許通知。
+   iPhone 只會問一次，按了「不允許」之後要到「設定 → 通知 → FX Alert」打開。
+3. 鎖定畫面只會顯示幣別和價格（例如「日圓到價：0.2040」），不會顯示目標價。
+   推播和 Email 用同一個通知時段；每人每天最多 10 則推播。
+
+Email 和推播各自獨立：取消 Email 訂閱不會關掉推播，關掉推播也不會停止 Email。
+每台裝置在「推播通知」的列表裡分開管理；登出會停止這台裝置的推播。
+
 ## 不想收信、或想刪除帳號
 
 - **暫停所有通知**：取消勾選 **Email 到價通知**，設定會保留，之後可以再打開。
@@ -346,10 +360,11 @@ commit 到 `state` 分支、部署 `data.json` 前都會自動掃描，確認沒
 事後確認兆豐那天沒有收盤價，在 `seed/tw_bank_calendar.csv` 加一行 `日期,off,颱風停班（臺北市；外匯市場休市）`。
 未來的颱風沒辦法預先知道：如果出發前提醒那天剛好停班，會在下一個營業日（備用日）補寄。
 
-### 進行中：網站做成 PWA、手機推播通知
+### 手機推播：開放進度
 
-設計和決定都在 [`docs/web-push.md`](docs/web-push.md)。目前完成 PR 1：網站可以「加到主畫面」（manifest、圖示、`sw.js`），
-PR 2 資料表、PR 3 設定頁的訂閱介面、PR 4 寄送（Email 寄出後也推播）。正式專案的推播等 12/15 A10 Demo 之後才開放。
+設計和決定都在 [`docs/web-push.md`](docs/web-push.md)，開放的階段、每天看的指標和 kill switch 在
+[`docs/rollout-plan.md`](docs/rollout-plan.md)。程式已經完成（加到主畫面、資料表、訂閱介面、寄送），
+還差「Email 關閉的人只收推播」（Demo 之後做）。正式專案的推播等 12/15 A10 Demo 之後才開放給一般使用者。
 
 修改 `site/sw.js` 時，請把裡面的 `SW_VERSION` 改成新的日期；使用者手機怎麼更新到新版，見 `docs/web-push.md`。
 
@@ -697,7 +712,8 @@ scripts/                            simulate_trip_rules.py（提醒次數模擬�
 tests/                              Python 測試；tests/db/ 是資料庫（RLS、pg_cron）測試；tests/fixtures/ 對照檔
 docs/multi-user.md                  多人版設計、切換與退回流程
 docs/trip-plan.md                   出國換匯計畫的設計、規則、測試與維護
-docs/web-push.md                    PWA、手機推播的設計（白名單、權限、Email 與推播的關係、sw.js 更新）
+docs/web-push.md                    PWA、手機推播的設計（白名單、權限、Email 與推播的關係、sw.js 更新、手動測試）
+supabase/reports/web_push_health.sql 推播健康報表（rollout 期間每天看；只有彙總數字）
 ```
 
 ## 資料來源

@@ -66,3 +66,32 @@ def test_cli_refuses_secret_key(tmp_path, monkeypatch):
     out = tmp_path / "config.js"
     assert main_mod.main(["site-config", "--out", str(out)]) == 1
     assert not out.exists()
+
+
+VAPID_PUBLIC = "B" + "x" * 86
+VAPID_PRIVATE = "p" * 43
+
+
+def test_web_push_public_key_is_added_when_auth_enabled():
+    cfg = build_site_config({**ON, "WEB_PUSH_PUBLIC_KEY": VAPID_PUBLIC + "="})
+    assert cfg["webPushPublicKey"] == VAPID_PUBLIC
+    assert "webPushPublicKey" not in build_site_config(ON)  # 沒設定：網頁顯示「推播尚未設定」
+
+
+def test_web_push_key_not_added_when_auth_disabled():
+    env = {"AUTH_ENABLED": "false", "WEB_PUSH_PUBLIC_KEY": VAPID_PUBLIC}
+    assert build_site_config(env) == {"authEnabled": False}
+
+
+@pytest.mark.parametrize(
+    ("value", "msg"),
+    [
+        (VAPID_PRIVATE, "私鑰"),
+        ("A" + "x" * 86, "87 字"),
+        (VAPID_PUBLIC[:-1], "87 字"),
+        (VAPID_PUBLIC + "!", "87 字"),
+    ],
+)
+def test_web_push_key_rejects_private_or_malformed_keys(value, msg):
+    with pytest.raises(SiteConfigError, match=msg):
+        build_site_config({**ON, "WEB_PUSH_PUBLIC_KEY": value})

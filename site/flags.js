@@ -8,13 +8,13 @@
 //   只要加上 data-flag="quick_target"，不用自己判斷，也不怕產生的順序。
 // - 沒登入：全部關閉（和 is_feature_on() 相同）。
 // - 問不到（網路錯誤、資料庫還沒有這個函式）：用 FALLBACK。
-//   已上線的 trip_plan 維持開啟（寫入仍由資料庫判斷）；新功能 quick_target 關閉。
+//   已上線的 trip_plan 維持開啟（寫入仍由資料庫判斷）；新功能 quick_target、web_push 關閉。
 // - 改了 flag 之後，使用者重新整理頁面才會看到變化（不用重新部署）。
 "use strict";
 
 (function () {
-  const FLAGS = ["trip_plan", "quick_target"];
-  const FALLBACK = { trip_plan: true, quick_target: false };
+  const FLAGS = ["trip_plan", "quick_target", "web_push"];
+  const FALLBACK = { trip_plan: true, quick_target: false, web_push: false };
 
   function allOff() {
     return Object.fromEntries(FLAGS.map((f) => [f, false]));

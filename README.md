@@ -223,6 +223,7 @@ Environment 限定 `main` 之後，只有合併進 main 的 workflow 拿得到�
 | `SUPABASE_URL` | 正式專案網址（前端用） |
 | `SUPABASE_PUBLISHABLE_KEY` | `sb_publishable_…`（公開金鑰，安全靠 RLS） |
 | `AUTH_ENABLED` | `true`：網站顯示登入、`data.json` 用公開版。刪掉這個 Variable＝回到單人版的網站 |
+| `WEB_PUSH_PUBLIC_KEY` | 手機推播的 VAPID **公鑰**（87 字、`B` 開頭，公開的）。沒設定時推播區塊顯示「還在設定中」。產生方式見 `docs/web-push.md` |
 
 ### Supabase（正式、staging 各自設定）
 
@@ -346,7 +347,7 @@ commit 到 `state` 分支、部署 `data.json` 前都會自動掃描，確認沒
 ### 進行中：網站做成 PWA、手機推播通知
 
 設計和決定都在 [`docs/web-push.md`](docs/web-push.md)。目前完成 PR 1：網站可以「加到主畫面」（manifest、圖示、`sw.js`），
-還不會送推播。正式專案的推播等 12/15 A10 Demo 之後才開放。
+PR 2 資料表、PR 3 設定頁的訂閱介面；寄送（PR 4）還沒做。正式專案的推播等 12/15 A10 Demo 之後才開放。
 
 修改 `site/sw.js` 時，請把裡面的 `SW_VERSION` 改成新的日期；使用者手機怎麼更新到新版，見 `docs/web-push.md`。
 
@@ -528,6 +529,7 @@ python -m fx_alert build-site              # 產生 site/data.json
 $env:AUTH_ENABLED = "true"
 $env:SUPABASE_URL = "https://<staging 專案代號>.supabase.co"
 $env:SUPABASE_PUBLISHABLE_KEY = "sb_publishable_..."
+$env:WEB_PUSH_PUBLIC_KEY = "B..."          # 選填：staging 的推播公鑰（測推播時才需要）
 python -m fx_alert site-config --out site\config.js
 python -m http.server 8000 -d site         # 開 http://localhost:8000/
 
@@ -679,7 +681,8 @@ site/
   unsubscribe.html  unsubscribe.js  退訂確認頁
   privacy.html                      隱私說明
   pwa.js  sw.js  manifest.webmanifest  icons/
-                                    加到主畫面（PWA）；sw.js 不做離線快取
+                                    加到主畫面（PWA）；sw.js 收推播、不做離線快取
+  push.js                           設定頁的推播通知（web_push flag 開啟時才顯示）
   vendor/                           Chart.js、supabase-js
   samples/  tests/                  本機預覽資料、前端測試（不部署）
 supabase/
@@ -688,7 +691,7 @@ supabase/
   functions/delete-account/         刪除帳號 Edge Function（Deno）
 seed/                               一次性回補的兆豐每日收盤價、銀行營業日曆（來源和 SHA-256 見 seed/README.md）
 scripts/                            simulate_trip_rules.py（提醒次數模擬）、make_trip_fixture.py（Python／網頁對照檔）、
-                                    make_icons.py（產生 PWA 圖示）
+                                    make_icons.py（產生 PWA 圖示）、vapid_keygen.js（產生推播金鑰）
 tests/                              Python 測試；tests/db/ 是資料庫（RLS、pg_cron）測試；tests/fixtures/ 對照檔
 docs/multi-user.md                  多人版設計、切換與退回流程
 docs/trip-plan.md                   出國換匯計畫的設計、規則、測試與維護

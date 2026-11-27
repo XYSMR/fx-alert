@@ -232,19 +232,21 @@ def flag_rows(db) -> list[tuple]:
     )
 
 
-def test_staging_config_opens_quick_target_to_admin_and_beta_only(db, alice, bob):
+def test_staging_config_opens_new_features_to_admin_and_beta_only(db, alice, bob):
     db.as_postgres()
     db.cur.execute((STAGING / "feature_flags.sql").read_text("utf-8"))
     assert flag_rows(db) == [
         ("quick_target", True, 0, ["admin", "beta"]),
         ("trip_plan", True, 100, ["admin", "beta"]),
-        ("web_push", False, 0, ["admin", "beta"]),  # 這個腳本不動 web_push
+        ("web_push", True, 0, ["admin", "beta"]),
     ]
     set_role(db, bob, "beta")
     db.as_user(alice)
     assert not is_on(db, "quick_target")
+    assert not is_on(db, "web_push")
     db.as_user(bob)
     assert is_on(db, "quick_target")
+    assert is_on(db, "web_push")
 
 
 def test_staging_evidence_script_passes_and_restores_flags(db):

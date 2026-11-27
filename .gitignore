@@ -12,3 +12,6 @@ data/
 site/data.json
 site/history/
 site/config.js
+
+# 手機推播的 VAPID 私鑰（scripts/vapid_keygen.js），不能進 git
+*.vapid

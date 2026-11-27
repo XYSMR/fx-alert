@@ -20,45 +20,53 @@ function fakeClient(answers) {
   };
 }
 
-test("兩個 flag 都問資料庫的 is_feature_on（前端不自己算分桶）", async () => {
+test("每個 flag 都問資料庫的 is_feature_on（前端不自己算分桶）", async () => {
   const client = fakeClient({
     trip_plan: { data: true, error: null },
     quick_target: { data: false, error: null },
+    web_push: { data: true, error: null },
   });
-  assert.deepEqual(await f.fetchFlags(client), { trip_plan: true, quick_target: false });
+  assert.deepEqual(await f.fetchFlags(client), { trip_plan: true, quick_target: false, web_push: true });
   const byFlag = (a, b) => (a[1].p_flag < b[1].p_flag ? -1 : 1);
   assert.deepEqual([...client.calls].sort(byFlag), [
     ["is_feature_on", { p_flag: "quick_target" }],
     ["is_feature_on", { p_flag: "trip_plan" }],
+    ["is_feature_on", { p_flag: "web_push" }],
   ]);
 });
 
 test("只有 data === true 才算開啟", async () => {
   for (const data of [null, undefined, "true", 1, false]) {
-    const client = fakeClient({ trip_plan: { data, error: null }, quick_target: { data, error: null } });
-    assert.deepEqual(await f.fetchFlags(client), { trip_plan: false, quick_target: false }, String(data));
+    const r = { data, error: null };
+    const client = fakeClient({ trip_plan: r, quick_target: r, web_push: r });
+    assert.deepEqual(await f.fetchFlags(client), f.allOff(), String(data));
   }
 });
 
-test("問不到：已上線的 trip_plan 維持開啟，新功能 quick_target 關閉", async () => {
+test("問不到：已上線的 trip_plan 維持開啟，新功能 quick_target、web_push 關閉", async () => {
+  const expected = { trip_plan: true, quick_target: false, web_push: false };
   const missing = { data: null, error: { code: "PGRST202", message: "function not found" } };
-  assert.deepEqual(await f.fetchFlags(fakeClient({ trip_plan: missing, quick_target: missing })),
-    { trip_plan: true, quick_target: false });
+  assert.deepEqual(
+    await f.fetchFlags(fakeClient({ trip_plan: missing, quick_target: missing, web_push: missing })),
+    expected);
   const offline = new Error("Failed to fetch");
-  assert.deepEqual(await f.fetchFlags(fakeClient({ trip_plan: offline, quick_target: offline })),
-    { trip_plan: true, quick_target: false });
-  assert.deepEqual(f.FALLBACK, { trip_plan: true, quick_target: false });
+  assert.deepEqual(
+    await f.fetchFlags(fakeClient({ trip_plan: offline, quick_target: offline, web_push: offline })),
+    expected);
+  assert.deepEqual(f.FALLBACK, expected);
 });
 
 test("沒登入／登出：全部關閉", () => {
-  assert.deepEqual(f.allOff(), { trip_plan: false, quick_target: false });
+  assert.deepEqual(f.allOff(), { trip_plan: false, quick_target: false, web_push: false });
 });
 
 test("結果寫在 <html data-flag-*>", () => {
   const attrs = {};
   const root = { setAttribute: (k, v) => { attrs[k] = v; } };
-  f.applyTo(root, { trip_plan: true, quick_target: false });
-  assert.deepEqual(attrs, { "data-flag-trip_plan": "on", "data-flag-quick_target": "off" });
+  f.applyTo(root, { trip_plan: true, quick_target: false, web_push: true });
+  assert.deepEqual(attrs, {
+    "data-flag-trip_plan": "on", "data-flag-quick_target": "off", "data-flag-web_push": "on",
+  });
 });
 
 test("style.css 對每個 flag 都有隱藏規則，而且預設（不是 on）就隱藏", () => {

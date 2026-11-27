@@ -422,6 +422,8 @@ async function login() {
 
 async function logout() {
   loggingOut = true;
+  // 登出就停止這台裝置的推播（下一個登入的人要自己重新開啟）
+  if (window.FxPush) await window.FxPush.forgetThisDevice(client);
   await client.auth.signOut();
   loggingOut = false;
 }
@@ -819,12 +821,27 @@ function deleteSection() {
       msg));
 }
 
+/** 推播通知（push.js）：web_push 對這個人沒開時是 null */
+function renderPush() {
+  if (!window.FxPush) return null;
+  const userId = state.session.user.id;
+  return window.FxPush.section({
+    client,
+    userId,
+    emailOn: state.profile.email_enabled !== false,
+    windowText: windowLabel(notifyWindow(state.profile)),
+    say,
+    isCurrent: () => state.session?.user.id === userId,
+  });
+}
+
 function renderRules(recordEvent) {
   byId("my-rules").hidden = false;
   const schedule = window.FxApp && window.FxApp.scheduleHint ? window.FxApp.scheduleHint() : "";
   byId("my-rules-body").replaceChildren(
     renderEmailSwitch(),
     renderNotifyWindow(),
+    renderPush(),
     schedule ? h("p", { class: "hint" }, schedule) : null,
     ...sortRules(state.rules, publicList).map(ruleRow),
     addForm(recordEvent),
